@@ -7,7 +7,7 @@ and animation timing can be checked without flashing the board.
 ```sh
 ./build.sh                      # needs g++
 ./preview sheet frames          # one settled frame per expression -> frames/*.ppm
-./preview strip frames shake    # timed sequence: blink, wake, sleep, shake, surprised, angry, gaze
+./preview strip frames shake    # timed sequence: blink, wake, sleep, shake, rattle, surprised, angry, gaze
 pip install pillow
 python3 sheet.py out.png frames/*.ppm --cols 4   # contact sheet, cropped to the round panel
 python3 make_previews.py frames                  # refresh the images used in the main README

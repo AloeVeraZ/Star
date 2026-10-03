@@ -3,6 +3,7 @@
 //
 //   ./preview sheet  OUTDIR        one settled frame per expression
 //   ./preview strip  OUTDIR NAME   a timed sequence for one reaction
+//                                  (blink wake sleep shake rattle surprised angry gaze)
 //
 // See README.md next to this file.
 #include <stdio.h>
@@ -91,6 +92,31 @@ int main(int argc, char **argv) {
     else if (name == "sleep") { sim.c.startSleep(sim.now, .3f); total = SLEEP_SEQUENCE_MS; step = 300; }
     else if (name == "shake") { sim.c.impact(14, 4); sim.c.react(DIZZY, sim.now, DIZZY_ANIM_MS);
                                 total = DIZZY_ANIM_MS + ANGRY_ANIM_MS + 2000; step = 250; }
+    else if (name == "rattle") {
+      // A hand shake as the sketch reports it: strokes every ~120 ms that
+      // reverse direction, a live shake level, and the dizzy spell after the
+      // third stroke.
+      int frame = 0;
+      for (int ms = 0; ms <= 2600; ms += 16) {
+        if (ms < 900) {
+          sim.c.shake(1.0f);
+          if (ms % 128 == 0) {
+            float s = (ms / 128) % 2 ? -1.0f : 1.0f;
+            sim.c.impact(14 * s, 3 * s);
+            int stroke = ms / 128 + 1;
+            if (stroke == 1) sim.c.react(SURPRISED, sim.now, 650);
+            if (stroke == 3) sim.c.react(DIZZY, sim.now, DIZZY_ANIM_MS);
+          }
+        }
+        if (ms % 112 == 0) {
+          char buf[64];
+          snprintf(buf, sizeof buf, "/rattle_%02d.ppm", frame++);
+          sim.shot(out + buf);
+        }
+        sim.run(16);
+      }
+      return 0;
+    }
     else if (name == "surprised") { sim.c.react(SURPRISED, sim.now, 1600); total = 900; step = 50; }
     else if (name == "angry") { sim.c.react(ANGRY, sim.now, ANGRY_ANIM_MS); total = 1000; step = 60; }
     else if (name == "gaze") { sim.c.setPointer(1, 0, sim.now); sim.c.setPointerHeld(true);

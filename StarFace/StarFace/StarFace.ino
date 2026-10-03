@@ -27,6 +27,7 @@ static constexpr uint32_t FRAME_US = 16667;      // frame cap (~60 FPS); render 
 static constexpr uint32_t NAP_FRAME_US = 33333;  // 30 FPS is plenty while the eyes are shut
 static constexpr float MAX_FRAME_DT = .05f;      // a stall never turns into an animation jump
 static constexpr bool LOG_FPS = false;           // print frames per second over serial
+static constexpr bool LOG_SHAKE = false;         // print each shake stroke's strength (for tuning)
 
 // Power (sleep timeouts and backlight levels are in FaceConfig.h).
 static constexpr int LOW_BATTERY_PERCENT = 3;    // a nap at or below this becomes deep sleep
@@ -47,7 +48,7 @@ static constexpr int TOUCH_WAKE_PIN = 5;  // CST816S IRQ, active-low touch pulse
 
 uint32_t lastActivity = 0, lastFrameUs = 0;
 bool sleepPreparing = false, deepSleepPlanned = false;
-bool imuReady = false, wokeByRotation = false;
+bool imuReady = false, wokeByShake = false;
 float tiltX = 0, tiltY = 0;
 float linX = 0, linY = 0; // smoothed gravity-free acceleration
 int touchStartX = -1, touchStartY = -1;
@@ -359,32 +360,56 @@ void handleSurroundings(const float a[3], bool heldStill, uint32_t now) {
   // pop open, tumble dizzily, glare, then calm down. A gentler pick-up just
   // wakes it.
   if (sleepPreparing && creature.sleepFinished(now) && jolt > PICKUP_MS2) {
-    bool shaken = jolt > SHAKE_PEAK_MS2;
+    bool shaken = jolt > SHAKE_STROKE_MS2;
     if (shaken) creature.impact(lin[0], lin[1]);
     startWakeAnimation(now, shaken);
     Serial.println(shaken ? "Nap ended by a shake" : "Nap ended by motion");
     return;
   }
 
-  // Several strong back-and-forth strokes: the full dizzy reaction.
-  static uint32_t firstPeakAt = 0, lastPeakAt = 0, lastBumpAt = 0;
-  static uint8_t peaks = 0;
-  static float peak[3] = {0, 0, 0};
-  if (jolt > SHAKE_PEAK_MS2 && now - lastPeakAt > 70) {
-    if (now - firstPeakAt > SHAKE_WINDOW_MS) peaks = 0;
-    float dot = lin[0] * peak[0] + lin[1] * peak[1] + lin[2] * peak[2];
-    if (peaks == 0 || dot < 0) {
-      if (peaks == 0) firstPeakAt = now;
-      ++peaks;
-      for (int i = 0; i < 3; ++i) peak[i] = lin[i];
-      lastPeakAt = now;
+  // ---- Shaking while awake ----
+  // How hard it is being shaken (a short running average) drives a live
+  // rattle in the eyes, so they react from the very first stroke. Strong
+  // strokes that reverse direction count toward the dizzy spell; each one also
+  // throws the eyes the other way, so they slosh with the motion.
+  static uint32_t lastSampleAt = 0, lastStrokeAt = 0, lastBumpAt = 0;
+  static uint8_t strokes = 0;
+  static float strokeDir[3] = {0, 0, 0};
+  static float shakeStrength = 0;
+  float dt = lastSampleAt ? min(uint32_t(100), now - lastSampleAt) / 1000.0f : .025f;
+  lastSampleAt = now;
+  float excess = fmaxf(0.0f, jolt - SHAKE_NOISE_MS2);
+  shakeStrength += (excess - shakeStrength) * (1.0f - expf(-dt / .35f));
+  if (shakeStrength > SHAKE_NOISE_MS2 * .5f)
+    creature.shake(shakeStrength / SHAKE_FULL_MS2);
+
+  if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
+  bool stroke = false;
+  if (jolt > SHAKE_STROKE_MS2 && now - lastStrokeAt > 60) {
+    float dot = lin[0] * strokeDir[0] + lin[1] * strokeDir[1] + lin[2] * strokeDir[2];
+    if (strokes == 0 || dot < 0) {
+      ++strokes;
+      for (int i = 0; i < 3; ++i) strokeDir[i] = lin[i];
+      lastStrokeAt = now;
+      stroke = true;
+      if (LOG_SHAKE) Serial.printf("shake stroke %u: %.1f m/s^2\n", strokes, jolt);
     }
-    if (peaks >= SHAKE_PEAKS_FOR_DIZZY) {
-      peaks = 0;
+  }
+  if (stroke) {
+    lastActivity = now; // being shaken is an interaction
+    sleepPreparing = false;
+    creature.impact(lin[0] * .6f, lin[1] * .6f);
+    if (strokes >= SHAKE_STROKES_FOR_DIZZY) {
+      // The full reaction: wobble, dizzy tumble, glare, calm down. Keep
+      // shaking and it starts spinning again.
+      strokes = 0;
       creature.impact(lin[0], lin[1]);
       react(DIZZY, now, DIZZY_ANIM_MS);
       return;
     }
+    if (strokes == 1 && creature.mood() != DIZZY && creature.mood() != ANGRY)
+      react(SURPRISED, now, 650); // whoa! -- the first stroke startles it
+    return;
   }
   if (sleepPreparing) return;
   if (jolt > BUMP_MS2 && now - lastBumpAt > 1500) {
@@ -643,17 +668,40 @@ bool enterDeepSleep(bool lcdReady) {
   return true;
 }
 
-bool confirmFastTwist() {
-  uint32_t began = millis();
+// After the IMU's coarse motion alarm woke the CPU (screen still dark): wake
+// the face only for a real shake (strong strokes that reverse direction) or a
+// back-and-forth twist. A walking jolt finds neither and goes back to sleep.
+bool confirmMotionWake() {
+  uint32_t began = millis(), lastStrokeAt = 0;
   TwistDetector detector;
+  float grav[3] = {0, 0, 0}, dir[3] = {0, 0, 0};
+  bool seeded = false;
+  uint8_t strokes = 0;
   while (millis() - began < TWIST_WINDOW_MS + TWIST_START_TIMEOUT_MS) {
     float a[3], g[3];
     readMotion(a, g);
     uint32_t now = millis();
     if (detector.feed(g, now)) return true;
-    // A walking jolt may wake the CPU, but it should re-sleep quickly unless
-    // a real X- or Y-axis back-and-forth twist starts soon afterward.
-    if (!detector.active() && now - began > TWIST_START_TIMEOUT_MS) return false;
+    if (!seeded) {
+      for (int i = 0; i < 3; ++i) grav[i] = a[i];
+      seeded = true;
+    }
+    float lin[3], jolt2 = 0, dot = 0;
+    for (int i = 0; i < 3; ++i) {
+      grav[i] += (a[i] - grav[i]) * .05f;
+      lin[i] = a[i] - grav[i];
+      jolt2 += lin[i] * lin[i];
+      dot += lin[i] * dir[i];
+    }
+    if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0;
+    if (jolt2 > SHAKE_STROKE_MS2 * SHAKE_STROKE_MS2 && now - lastStrokeAt > 60 &&
+        (strokes == 0 || dot < 0)) {
+      for (int i = 0; i < 3; ++i) dir[i] = lin[i];
+      lastStrokeAt = now;
+      if (LOG_SHAKE) Serial.printf("wake stroke %u: %.1f m/s^2\n", strokes + 1, sqrtf(jolt2));
+      if (++strokes >= SHAKE_STROKES_TO_WAKE) return true;
+    }
+    if (!detector.active() && !strokes && now - began > TWIST_START_TIMEOUT_MS) return false;
     delay(20);
   }
   return false;
@@ -694,20 +742,22 @@ void setup() {
   uint64_t source = cause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
   Serial.printf("Wake cause=%d, pins=0x%llX\n", int(cause), source);
   bool touchWake = (source & (1ULL << TOUCH_WAKE_PIN)) != 0;
-  bool twoPressConfirmed = touchWake && confirmTwoPressWake();
+  // A touch wakes it straight away (or needs a second press when
+  // TOUCH_WAKE_DOUBLE_PRESS is set, to avoid waking in a pocket).
+  bool touchConfirmed = touchWake && (!TOUCH_WAKE_DOUBLE_PRESS || confirmTwoPressWake());
   if (cause == ESP_SLEEP_WAKEUP_EXT1) exitMotionWake();
   imuReady = QMI8658_init() != 0;
-  if (touchWake && !twoPressConfirmed && !(source & (1ULL << IMU_WAKE_PIN))) {
+  if (touchWake && !touchConfirmed && !(source & (1ULL << IMU_WAKE_PIN))) {
     Serial.println("Single touch wake rejected; returning to sleep");
     if (enterDeepSleep(false)) return;
   }
-  if (imuReady && (source & (1ULL << IMU_WAKE_PIN)) && !twoPressConfirmed) {
-    // Motion wakes the CPU but not the LCD. Count fast back-and-forth twists
-    // around either axis parallel to the screen before showing the face.
-    if (!confirmFastTwist()) {
+  if (imuReady && (source & (1ULL << IMU_WAKE_PIN)) && !touchConfirmed) {
+    // Motion wakes the CPU but not the LCD. Only a real shake (or twist)
+    // turns the face on; it then wakes startled, dizzy and grumpy.
+    if (!confirmMotionWake()) {
       Serial.println("Motion wake rejected; returning to sleep");
       if (enterDeepSleep(false)) return;
-    } else wokeByRotation = true;
+    } else wokeByShake = true;
   }
   // Internal RAM is much faster than PSRAM for per-pixel blending.
   size_t bytes = W * H * sizeof(uint16_t);
@@ -734,11 +784,11 @@ void setup() {
                  uint32_t(mac ^ (mac >> 32)), lastActivity);
   readBattery();
   lastBatteryCheck = lastActivity;
-  startWakeAnimation(lastActivity, wokeByRotation);
-  if (wokeByRotation) {
-    Serial.println("Back-and-forth twist confirmed; waking into dizzy eyes");
-  } else if (twoPressConfirmed) {
-    Serial.println("Two screen presses confirmed; waking face");
+  startWakeAnimation(lastActivity, wokeByShake);
+  if (wokeByShake) {
+    Serial.println("Shake confirmed; waking into dizzy eyes");
+  } else if (touchConfirmed) {
+    Serial.println("Touch wake confirmed; waking face");
   }
   // First frame: the whole screen is cleared while the backlight is still off.
   lastFrameUs = micros() - FRAME_US;

@@ -811,6 +811,12 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       break;
   }
 
+  // Being shaken: eyes widen in alarm, pupils shrink.
+  if (shakeLevel > .01f && !scripted) {
+    float a = fminf(shakeLevel, 1.0f);
+    for (float *p : {L, R}) { p[P_OPEN] += .14f * a; p[P_PUPIL] -= .15f * a; p[P_DROP] -= 3 * a; }
+    f = fmaxf(f, 6.0f);
+  }
   // Every reaction lands with slightly different strength.
   if (!scripted && current != IDLE) {
     const float amount = intensity * EXPRESSION_INTENSITY;
@@ -972,6 +978,18 @@ void CreatureAnimator::updateShakeReaction(float dt) {
     }
   } else if (current == ANXIOUS) {
     ex[0] = ex[1] = 2.5f * sinf(TAU_F * 8.7f * clock);
+  }
+  // Being shaken: both eyes rattle around (a little out of step with each
+  // other) and the pupils jiggle inside them. Fades out once shaking stops.
+  shakeLevel = approach(shakeLevel, 0.0f, 3.5f, dt);
+  if (shakeLevel > .01f && current != SLEEPY) {
+    const float a = shakeLevel;
+    for (int i = 0; i < 2; ++i) {
+      ex[i] += a * 6.0f * noise1(clock * 13.0f + i * 3.1f, seed + 61 + i);
+      ey[i] += a * 4.5f * noise1(clock * 11.0f + i * 1.7f, seed + 71 + i);
+      px[i] += a * .55f * noise1(clock * 9.0f + i, seed + 81 + i);
+      py[i] += a * .40f * noise1(clock * 8.0f + i, seed + 91 + i);
+    }
   }
   if (current == ANGRY || current == ANXIOUS) { // small rapid eye movements
     for (int i = 0; i < 2; ++i) {

@@ -60,19 +60,28 @@ static constexpr float GLOW_FALLOFF = 5.5f;       // px for the halo to fade to 
 static constexpr float GLOW_EXTENT = 16.0f;       // halo fades to zero by this distance (cost grows with it)
 static constexpr bool DITHER = true;              // ordered dithering hides RGB565 banding
 
-// ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2) ------------
-static constexpr float SHAKE_PEAK_MS2 = 16.0f;    // one stroke of a vigorous shake
-static constexpr uint8_t SHAKE_PEAKS_FOR_DIZZY = 4;
-static constexpr uint32_t SHAKE_WINDOW_MS = 1300;
-static constexpr float BUMP_MS2 = 9.0f;           // a knock: recoil and a startled look
+// ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
+// Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
+// raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
+// print each stroke's strength over serial while you tune.
+static constexpr float SHAKE_STROKE_MS2 = 11.0f;  // one stroke of a shake (~1.1 g beyond gravity)
+static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 3; // back-and-forth strokes for the dizzy spell
+static constexpr uint32_t SHAKE_GAP_MS = 450;     // longest pause between strokes of one shake
+static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
+static constexpr float SHAKE_FULL_MS2 = 8.0f;     // average shake strength for a full-strength rattle
+static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
 
 // ---- Sleep & power ---------------------------------------------------------------
-// By default the face never goes black on its own: it naps with a dim breathing
-// glow and wakes on touch or movement.
-static constexpr bool AUTO_DEEP_SLEEP = false;    // true: switch fully off after IDLE_SLEEP_MS
-static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // deep-sleep timeout when AUTO_DEEP_SLEEP
-static constexpr uint32_t IDLE_NAP_MS = 45000;    // stays on: dozes off after this long alone
+// After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to
+// black, then the screen and ESP32 power down (deep sleep). A touch or a shake
+// wakes it again. Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it
+// then naps with a dim, breathing glow after IDLE_NAP_MS.
+static constexpr bool AUTO_DEEP_SLEEP = true;
+static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // power-save timeout when AUTO_DEEP_SLEEP
+static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
+static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
+static constexpr uint8_t SHAKE_STROKES_TO_WAKE = 3;    // back-and-forth strokes that wake it
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
 

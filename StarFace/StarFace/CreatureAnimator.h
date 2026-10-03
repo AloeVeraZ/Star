@@ -53,6 +53,9 @@ class CreatureAnimator {
   void setSwipe(int sx, int sy) { swipeX = sx; swipeY = sy; }
   void applyInertia(float ax, float ay);  // gravity-free device acceleration, m/s^2
   void impact(float ax, float ay);        // a hard jolt: throw the eyes the other way
+  // Being shaken right now, 0 (still) .. 1 (hard). Called every IMU sample
+  // while shaking; the eyes rattle, widen and their pupils jiggle, then settle.
+  void shake(float level) { shakeLevel = fmaxf(shakeLevel, anim::clampf(level, 0.0f, 1.3f)); }
   void setDrowsiness(float d) { drowsy = anim::clamp01(d); }
   void setIdleActsAllowed(bool allowed) { idleActsAllowed = allowed; }
 
@@ -128,6 +131,7 @@ class CreatureAnimator {
   Spring fxX[2], fxY[2];           // procedural eye offsets (dizzy, shiver), px
   Spring pfxX[2], pfxY[2];         // procedural pupil offsets
   float inertiaX = 0, inertiaY = 0;
+  float shakeLevel = 0;            // live rattle while being shaken, decays when it stops
   float tiltX = 0, tiltY = 0, leanSm = 0;
   int8_t boopFar = -1;             // eye that flinches second after a boop
 

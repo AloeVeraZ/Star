@@ -21,6 +21,7 @@ int main() {
   const Mood moods[] = {HAPPY, SAD, ANGRY, DIZZY, SURPRISED, ANXIOUS, BOOP, PETTED,
                         SWIPING, FOLLOWING, CONFUSED, SHY, SHIVER, LOOK_CHANGE};
   long frames = 0;
+  bool held = false;
   for (; now < 3u * 3600u * 1000u; now += 16 + (esp_random() % 30)) { // ~3 h, 20-50 FPS
     float dt = 0;
     static uint32_t prev = 0;
@@ -37,7 +38,9 @@ int main() {
     else if (r100 < 13) c.changeLook(esp_random() % 4, esp_random() % 7, esp_random() & 1);
     else if (r100 < 20) { c.setPointer((esp_random() % 200) / 100.0f - 1, (esp_random() % 200) / 100.0f - 1, now);
                           c.setTouchPoint(esp_random() % 240, esp_random() % 240); }
-    c.setPointerHeld((esp_random() % 50) == 0);
+    if (esp_random() % 120 == 0) held = !held;          // holds of a few seconds
+    c.setPointerHeld(held, now);
+    if (held && esp_random() % 400 == 0) c.huff(c.annoyance(), now);
     c.setTilt(sinf(now * .0007f), cosf(now * .0011f));
     c.applyInertia((esp_random() % 21) - 10.0f, (esp_random() % 21) - 10.0f);
     c.setDrowsiness((now / 7000) % 2 ? .8f : 0);
@@ -54,8 +57,9 @@ int main() {
       CHECK(sqrtf(dx * dx + dy * dy) < SAFE_RADIUS, "t=%u eye %d centre off-screen", now, i);
     }
     CHECK(c.backlight() >= 0 && c.backlight() <= 1.0001f, "t=%u backlight %.2f", now, c.backlight());
-    // Every mood but sleep must end (the longest scripted one is a few seconds).
-    if (c.mood() != lastMood) { lastMood = c.mood(); moodSince = now; }
+    // Every mood but sleep must end (the longest scripted one is a few seconds);
+    // following a finger lasts while the finger is held, then must end too.
+    if (c.mood() != lastMood || (c.mood() == FOLLOWING && held)) { lastMood = c.mood(); moodSince = now; }
     CHECK(c.mood() == IDLE || c.mood() == SLEEPY || now - moodSince < 12000,
           "t=%u mood %d stuck for %u ms", now, c.mood(), now - moodSince);
     if (frames % 7 == 0) { // render a sample of frames (sanitizers check every pixel write)

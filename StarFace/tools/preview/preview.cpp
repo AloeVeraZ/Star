@@ -3,7 +3,7 @@
 //
 //   ./preview sheet  OUTDIR        one settled frame per expression
 //   ./preview strip  OUTDIR NAME   a timed sequence for one reaction
-//                                  (blink wake sleep shake rattle surprised angry gaze)
+//                                  (blink wake sleep shake rattle hold surprised angry gaze)
 //
 // See README.md next to this file.
 #include <stdio.h>
@@ -31,7 +31,7 @@ struct Sim {
   EyeRenderer r;
   CreatureAnimator c;
   uint32_t now = 0;
-  explicit Sim(uint8_t look = 0, uint8_t palette = DEFAULT_EYE_COLOR) {
+  explicit Sim(uint8_t look = DEFAULT_EYE_STYLE, uint8_t palette = STYLE_PALETTE[DEFAULT_EYE_STYLE]) {
     previewRandomState() = 0x9E3779B9u;
     r.begin(fb, nullptr);
     c.begin(&r, look, palette, 1, 0x5A17C3u, now);
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
       else sim.run(400);
       sim.shot(out + "/" + s.name + ".ppm");
     }
-    { Sim sim; sim.wake(); sim.c.setPointer(1, -.2f, sim.now); sim.c.setPointerHeld(true);
+    { Sim sim; sim.wake(); sim.c.setPointer(1, -.2f, sim.now); sim.c.setPointerHeld(true, sim.now);
       sim.c.react(FOLLOWING, sim.now, 3000); sim.run(900); sim.shot(out + "/look_right.ppm"); }
     { Sim sim; sim.wake(); sim.c.setTilt(-.9f, .9f); sim.run(1600); sim.shot(out + "/look_down_left.ppm"); }
     { Sim sim; sim.wake(); sim.c.startSleep(sim.now, .3f); sim.run(SLEEP_SEQUENCE_MS + 1200);
@@ -76,8 +76,9 @@ int main(int argc, char **argv) {
     { Sim sim; sim.wake(); sim.c.react(ANGRY, sim.now, ANGRY_ANIM_MS); sim.run(ANGRY_ANIM_MS + 900);
       sim.shot(out + "/grumpy_after.ppm"); }
     for (int look = 1; look < EYE_LOOK_COUNT; ++look) {
-      Sim sim(look, look + 1); sim.wake(); sim.run(300);
-      sim.shot(out + "/look" + std::to_string(look) + ".ppm");
+      Sim sim(look, STYLE_PALETTE[look]); sim.wake(); sim.run(300);
+      static const char *names[] = {"nova", "halo", "blip", "cat"};
+      sim.shot(out + "/style_" + names[look] + ".ppm");
     }
     return 0;
   }
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
     sim.wake();
     uint32_t total = 1200, step = 66;
     if (name == "blink") { sim.c.react(IDLE, sim.now, 0); total = 330; step = 16; }
-    else if (name == "wake") { Sim fresh; sim.c.startSleep(sim.now, 0); sim.run(SLEEP_SEQUENCE_MS + 500);
+    else if (name == "wake") { sim.c.startSleep(sim.now, 0); sim.run(SLEEP_SEQUENCE_MS + 500);
                                sim.c.startWake(sim.now, false); total = 3600; step = 200; }
     else if (name == "sleep") { sim.c.startSleep(sim.now, .3f); total = SLEEP_SEQUENCE_MS; step = 300; }
     else if (name == "shake") { sim.c.impact(14, 4); sim.c.react(DIZZY, sim.now, DIZZY_ANIM_MS);
@@ -117,9 +118,27 @@ int main(int argc, char **argv) {
       }
       return 0;
     }
+    else if (name == "hold") {
+      // A finger held on the screen for 6 s, moving a little, then let go.
+      int frame = 0;
+      sim.c.setPointer(.3f, .1f, sim.now);
+      sim.c.setPointerHeld(true, sim.now);
+      sim.c.react(FOLLOWING, sim.now, 600);
+      for (int ms = 0; ms <= 9000; ms += 16) {
+        if (ms < 6000) sim.c.setPointer(.3f + .4f * sinf(ms * .001f), .1f, sim.now);
+        if (ms == 6000) { sim.c.huff(sim.c.annoyance(), sim.now); sim.c.setPointerHeld(false, sim.now); }
+        if (ms % 752 == 0) {
+          char buf[64];
+          snprintf(buf, sizeof buf, "/hold_%02d.ppm", frame++);
+          sim.shot(out + buf);
+        }
+        sim.run(16);
+      }
+      return 0;
+    }
     else if (name == "surprised") { sim.c.react(SURPRISED, sim.now, 1600); total = 900; step = 50; }
     else if (name == "angry") { sim.c.react(ANGRY, sim.now, ANGRY_ANIM_MS); total = 1000; step = 60; }
-    else if (name == "gaze") { sim.c.setPointer(1, 0, sim.now); sim.c.setPointerHeld(true);
+    else if (name == "gaze") { sim.c.setPointer(1, 0, sim.now); sim.c.setPointerHeld(true, sim.now);
                                sim.c.react(FOLLOWING, sim.now, 3000); total = 700; step = 50; }
     if (name == "blink") {
       // Force a blink right now by advancing to the next scheduled one.

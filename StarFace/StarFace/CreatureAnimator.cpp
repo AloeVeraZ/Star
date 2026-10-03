@@ -78,6 +78,31 @@ constexpr int32_t SLEEP_FADE_MS = SLEEP_SEQUENCE_MS - SLEEP_FADE_AT;
 
 constexpr float INERTIA_GAIN = 220.0f; // px/s^2 of eye push per m/s^2 of device acceleration
 
+// Each eye style has its own personality: idle habits layered on the same
+// moods. NOVA calm & curious, HALO shy, BLIP playful, CAT sassy.
+struct Persona {
+  Mood idleAct;       // the little performance it puts on by itself
+  float gazeHold;     // how long it holds a gaze (x)
+  float gazeSpeed;    // how quickly its eyes move (x)
+  float bounce;       // spring damping (x): below 1 is bouncier
+  float blinkGap;     // time between blinks (x)
+  float open;         // resting eye opening offset
+  float lidDrop;      // resting lid drop, px (authored at 48 px eye height)
+  float lidAngle;     // resting lid slope: + sly/sassy, - soft/worried
+  float lookDown;     // resting gaze bias (+ down)
+  float doubleBlink;  // extra chance of a double blink
+  float halfBlink;    // extra chance of a half blink
+  float slowBlink;    // chance a blink is a long, slow "cat blink"
+};
+const Persona PERSONAS[EYE_LOOK_COUNT] = {
+  // act       hold  speed bounce blink open    drop angle   down  dbl  half slow
+  {CONFUSED,   1.0f, 1.0f, 1.0f,  1.0f, 0.0f,   0,   0.0f,   0.0f, 0,   0,   0},    // NOVA
+  {SHY,        1.3f, .80f, 1.05f, .80f, -.04f,  2,  -.05f,   .20f, 0,   .20f, 0},   // HALO
+  {HAPPY,      .55f, 1.35f, .72f, .85f, .05f,  -2,   0.0f,  -.05f, .22f, 0,   0},   // BLIP
+  {PETTED,     1.7f, .85f, 1.0f,  1.4f, -.06f,  7,   .08f,   0.0f, 0,   0,   .35f}, // CAT
+};
+inline const Persona &personaOf(uint8_t style) { return PERSONAS[style % EYE_LOOK_COUNT]; }
+
 uint8_t priorityOf(Mood m) {
   switch (m) {
     case DIZZY: return 6;
@@ -110,7 +135,8 @@ void setPose(float *p, float dx, float dy, float w, float h, float open,
 void CreatureAnimator::begin(EyeRenderer *r, uint8_t look, uint8_t palette,
                              uint8_t pers, uint32_t unitSeed, uint32_t now) {
   renderer = r;
-  personality = pers;
+  (void)pers; // the eye style decides the personality (see PERSONAS)
+  personality = look % EYE_LOOK_COUNT;
   seed = unitSeed;
   // Stable per-unit asymmetry: one lid sits a little lower, one eye opens a hair less.
   int lowLid = seed & 1;
@@ -151,6 +177,14 @@ bool CreatureAnimator::react(Mood m, uint32_t now, uint32_t durationMs, bool dir
   return true;
 }
 
+void CreatureAnimator::huff(float amount, uint32_t now) {
+  amount = clamp01(amount);
+  if (activeAt(now) && current == DIZZY) return;
+  queued = IDLE;
+  enterMood(ANGRY, now, 450 + uint32_t(900 * amount), .55f + .45f * amount);
+  angerResidue = amount;
+}
+
 bool CreatureAnimator::reactPassive(Mood m, uint32_t now, uint32_t durationMs) {
   if (activeAt(now)) return false;
   enterMood(m, now, durationMs, frand(.6f, .85f)); // self-started moods are subtler
@@ -186,6 +220,7 @@ void CreatureAnimator::changeLook(uint8_t look, uint8_t palette, bool instant) {
 
 void CreatureAnimator::applyLook(uint8_t look, uint8_t palette, bool instant) {
   if (renderer) renderer->setPalette(palette);
+  personality = look % EYE_LOOK_COUNT; // a new style brings its own personality
   baseW.target = lookHalfWidth(look);
   baseH.target = lookHalfHeight(look);
   baseIris.target = lookIris(look);
@@ -266,7 +301,7 @@ void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, floa
   current = m;
   // Anger never just switches off: the lids stay a little heavy and the colour
   // a little warm, cooling over ANGER_COOLDOWN_S.
-  if (previous == ANGRY && m != ANGRY) grumpy = 1;
+  if (previous == ANGRY && m != ANGRY) grumpy = fmaxf(grumpy, angerResidue);
   moodStart = now;
   moodUntil = now + durationMs;
   age = 0;
@@ -298,6 +333,7 @@ void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, floa
     case ANGRY:
       nextAngrySquint = now + randMs(700, 1300);
       angrySquintUntil = 0;
+      angerResidue = 1;
       break;
     case ANXIOUS:
       nextDartAt = now;
@@ -342,6 +378,11 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
     if (m == BATTERY) showBattery(queuedParam, now);
     else enterMood(m, now, queuedDuration);
   }
+  // Following a finger lasts as long as the finger stays down.
+  if (current == FOLLOWING && pointerHeld && int32_t(moodUntil - now) < 250) moodUntil = now + 250;
+  holdAnnoy = pointerHeld ? smoothstep(float(HOLD_ANGER_START_MS), float(HOLD_ANGER_FULL_MS),
+                                       float(now - holdSince))
+                          : 0.0f;
   if (current != IDLE && current != SLEEPY && int32_t(now - moodUntil) >= 0) {
     if (current == BATTERY && batteryReturnRemaining) {
       uint32_t remaining = batteryReturnRemaining;
@@ -391,7 +432,7 @@ void CreatureAnimator::pickIdleGaze(uint32_t now) {
     }
   }
   nx = clampf(nx, -.95f, .95f);
-  ny = clampf(ny * .8f, -.8f, .8f);
+  ny = clampf(ny * .8f + personaOf(personality).lookDown, -.8f, .8f);
   float jump = sqrtf((nx - idleGX) * (nx - idleGX) + (ny - idleGY) * (ny - idleGY));
   idleGX = nx;
   idleGY = ny;
@@ -404,6 +445,7 @@ void CreatureAnimator::pickIdleGaze(uint32_t now) {
   }
   staring = !glancing && hold > 4500;
   if (current == HAPPY) hold = hold * 6 / 10;
+  if (!glancing) hold = uint32_t(hold * personaOf(personality).gazeHold);
   nextGazeAt = now + uint32_t(hold * (1.0f + drowsy));
   // Big gaze shifts often carry a blink, as they do in people.
   if (jump > .55f && !blink.active && blinkAllowed() && chance(.3f)) startBlink(now, B_NORMAL);
@@ -442,7 +484,7 @@ void CreatureAnimator::updateIdle(float dt, uint32_t now) {
   }
   // A stable, chip-specific personality picks small self-started performances.
   if (idleActsAllowed && int32_t(now - nextIdleAct) >= 0) {
-    Mood act = personality == 0 ? SHY : personality == 1 ? HAPPY : CONFUSED;
+    Mood act = personaOf(personality).idleAct;
     if (chance(.125f)) act = SURPRISED;
     reactPassive(act, now, randMs(480, 830));
     nextIdleAct = now + randMs(12000, 21000);
@@ -467,6 +509,7 @@ void CreatureAnimator::scheduleBlink(uint32_t now) {
   // Weighted toward the shorter end of BLINK_MIN_MS..BLINK_MAX_MS.
   float interval = BLINK_MIN_MS + float(BLINK_MAX_MS - BLINK_MIN_MS) * powf(frand(), 1.5f);
   if (grumpy > .3f) interval *= 1.2f; // a sulky stare
+  interval *= personaOf(personality).blinkGap;
   switch (current) {
     case SAD: interval *= 1.35f; break;
     case ANGRY: interval *= 1.25f; break;
@@ -545,7 +588,9 @@ void CreatureAnimator::updateBlink(uint32_t now) {
   if (current == HAPPY || current == PETTED) type = r < .45f ? B_SQUEEZE : B_NORMAL;
   else if (current == ANXIOUS) type = r < .7f ? B_FAST : B_NORMAL;
   else if (current == SAD || drowsy > .6f) type = r < .45f ? B_SLEEPY : r < .6f ? B_HALF : B_NORMAL;
-  else if (chance(DOUBLE_BLINK_CHANCE)) pair = true;
+  else if (chance(DOUBLE_BLINK_CHANCE + personaOf(personality).doubleBlink)) pair = true;
+  else if (chance(personaOf(personality).slowBlink)) type = B_SLEEPY;  // a slow cat blink
+  else if (chance(personaOf(personality).halfBlink)) type = B_HALF;
   else if (r < .64f) type = B_NORMAL;
   else if (r < .76f) type = B_FAST;
   else if (r < .84f) type = B_LONG;
@@ -652,6 +697,10 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
         a[P_OPEN] = 1.06f; a[P_DROP] = 3.5f; b[P_OPEN] = .9f; b[P_ANGLE] = .1f;
       } else if (quirk == 3) { // soft and relaxed
         L[P_OPEN] = R[P_OPEN] = .9f; L[P_DROP] = R[P_DROP] = 8;
+      }
+      {
+        const Persona &pp = personaOf(personality);
+        for (float *p : {L, R}) { p[P_OPEN] += pp.open; p[P_DROP] += pp.lidDrop; p[P_ANGLE] += pp.lidAngle; }
       }
       // Near the sleep timeout the lids start to get heavy.
       for (float *p : {L, R}) { p[P_OPEN] -= .14f * drowsy; p[P_DROP] += 3 * drowsy; }
@@ -765,10 +814,19 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       f = 5; z = .45f;
       break;
     }
-    case FOLLOWING:
+    case FOLLOWING: {
+      // Curious at first; held on, it glares harder and harder at the finger.
+      static const float GLARE[] = {2.2f, -1, 1.04f, .93f, .66f, .36f, 18, 3, .88f, 0};
       both(0, 0, 1, 1, .93f, .04f, 6, 0, 1);
-      f = 4; z = .7f;
+      const float a = holdAnnoy;
+      if (a > 0) {
+        for (int c = 0; c < P_COUNT; ++c) { L[c] = mix(L[c], GLARE[c], a); R[c] = mix(R[c], GLARE[c], a); }
+        L[P_DROP] += 1.2f * a;
+        R[P_ANGLE] += .03f * a;
+      }
+      f = mix(4.0f, 5.5f, a); z = .7f;
       break;
+    }
     case CONFUSED:
       setPose(L, 0, 2, .98f, .98f, .56f, .14f + .03f * sinf(TAU_F * .7f * t), 10, 0, .95f);
       setPose(R, 0, -3, 1.03f, 1.05f, 1.04f, -.08f, 3, 0, 1);
@@ -843,7 +901,8 @@ void CreatureAnimator::updateGaze(float dt, uint32_t now) {
   // Idle wander mixed with the board's tilt (the eyes follow gravity).
   float tx = clampf(idleGX * .8f + tiltX * .55f, -1.0f, 1.0f);
   float ty = clampf(idleGY * .8f + tiltY * .55f, -1.0f, 1.0f);
-  float f = fastGaze ? 6.5f : 4.2f, z = .68f;
+  const Persona &pp = personaOf(personality);
+  float f = (fastGaze ? 6.5f : 4.2f) * pp.gazeSpeed, z = .68f * pp.bounce;
   bool usePointer = pointerHeld ||
       (now - pointerAt < 1300 && (current == HAPPY || current == BOOP || current == PETTED ||
                                   current == SWIPING || current == FOLLOWING));
@@ -991,6 +1050,14 @@ void CreatureAnimator::updateShakeReaction(float dt) {
       py[i] += a * .40f * noise1(clock * 8.0f + i, seed + 91 + i);
     }
   }
+  // Held on for too long: it trembles with rage.
+  if (current == FOLLOWING && holdAnnoy > .6f) {
+    float a = (holdAnnoy - .6f) / .4f;
+    for (int i = 0; i < 2; ++i) {
+      ex[i] += 1.8f * a * noise1(clock * 17.0f + i * 2.3f, seed + 101 + i);
+      ey[i] += 1.0f * a * noise1(clock * 15.0f + i * 1.1f, seed + 111 + i);
+    }
+  }
   if (current == ANGRY || current == ANXIOUS) { // small rapid eye movements
     for (int i = 0; i < 2; ++i) {
       px[i] += .05f * noise1(clock * 9, seed + 11 + i);
@@ -1030,6 +1097,7 @@ void CreatureAnimator::updateMoodColour(float dt) {
     case ANGRY: hot = age < 110 ? .25f : .9f; bright = 1.12f; break;
     case DIZZY: hot = .35f * smoothstep(1.7f, 2.7f, age / 1000.0f); bright = .94f; break;
     case SURPRISED: bright = 1.12f; break;
+    case FOLLOWING: hot = .95f * holdAnnoy; bright = 1.0f + .12f * holdAnnoy; break;
     case HAPPY: case PETTED: bright = 1.07f; break;
     case SAD: bright = .80f; break;
     case SHY: bright = .90f; break;
@@ -1135,6 +1203,7 @@ void CreatureAnimator::compose() {
     g.bend = (expr[i][P_BEND].pos - 2.0f * fmaxf(0.0f, c)) * S;
     g.glow = glowS.pos * glowBreath;
     g.heat = heat;
+    g.style = personality;
     g.blink = fmaxf(0.0f, c);
     // Dizzy: spiral pupils spin up as the tumble starts, slow down with it and
     // fade back into normal pupils during the recovery.

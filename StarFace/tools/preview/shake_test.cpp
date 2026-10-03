@@ -46,7 +46,10 @@ struct Knock : Motion {    // one sharp hit at t = 1 s with a short ring-down
 
 // Mirrors handleMotion()/handleSurroundings(): sample, gravity low-pass, detect.
 // Returns ms until DIZZY (or -1) and counts strokes.
+struct Reactions { int strokes = 0, startles = 0, bumps = 0; float maxRattle = 0; };
+static Reactions seen;
 static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
+  seen = Reactions();
   ShakeDetector det;
   TwistDetector twist; // the sketch runs both; either one makes it dizzy
   float grav[3] = {1.5f, 2.0f, 9.4f};
@@ -58,7 +61,11 @@ static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
     for (int i = 0; i < 3; ++i) { grav[i] += (a[i] - grav[i]) * .08f; lin[i] = a[i] - grav[i]; }
     float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
     ShakeDetector::Event ev = det.feed(lin, spin, uint32_t(tms) + 1);
-    if (ev == ShakeDetector::FIRST_STROKE || ev == ShakeDetector::STROKE) ++*strokesSeen;
+    if (ev == ShakeDetector::STROKE || ev == ShakeDetector::STARTLE) ++*strokesSeen;
+    if (ev == ShakeDetector::STARTLE) ++seen.startles;
+    if (ev == ShakeDetector::BUMP) ++seen.bumps;
+    seen.strokes = *strokesSeen;
+    if (det.rattle() > seen.maxRattle) seen.maxRattle = det.rattle();
     if (ev == ShakeDetector::DIZZY || twist.feed(g, uint32_t(tms) + 1)) return int(tms);
   }
   return -1;
@@ -105,14 +112,33 @@ int main() {
     {"walking", new Walk(3.0f, 1.8f)}, {"brisk walking", new Walk(4.5f, 2.2f)},
     {"running", new Walk(8.0f, 2.8f)}, {"single knock", new Knock()},
   };
+  printf("Carried around for 20 s (must never startle or go dizzy; a knock at rest should register):\n");
   for (auto &c : calm) {
     ms = runAwake(*c.m, 40, 20.0f, &s);
-    bool bad = ms >= 0 && c.m && (c.name[0] != 'r');
-    printf("%-14s: dizzy %s, %d stroke(s) in 20 s%s\n", c.name, ms < 0 ? "never" : "TRIGGERED",
-           s, bad ? "  <-- FALSE TRIGGER" : "");
+    bool knock = c.name[0] == 's';
+    // (A ~30 ms knock may fall between samples; it must just never startle.)
+    bool bad = ms >= 0 || seen.startles > 0 || (knock ? seen.bumps > 1 : seen.bumps > 0);
+    printf("  %-13s: dizzy %-5s startled %d  knock-reaction %d  eye sloshes %d  max rattle %.2f%s\n",
+           c.name, ms < 0 ? "never" : "YES", seen.startles, seen.bumps, s, seen.maxRattle,
+           bad ? "  <-- WRONG" : "");
     if (bad) ++fails;
   }
 
+  {
+    // A knock that is sampled, on a star that has been resting: BUMP. The same
+    // jolt right after being carried (busy) must not count as a knock.
+    ShakeDetector det;
+    float still[3] = {0, 0, 0}, hit[3] = {14, 3, 0};
+    for (uint32_t t = 1; t < 3000; t += 40) det.feed(still, 0, t);
+    bool resting = det.feed(hit, 0, 3001) == ShakeDetector::BUMP;
+    ShakeDetector busy;
+    float step[3] = {0, 0, 6};
+    for (uint32_t t = 1; t < 3000; t += 40) busy.feed(step, 0, t);
+    bool carried = busy.feed(hit, 0, 3001) == ShakeDetector::BUMP;
+    printf("Knock on a resting star: %s; same knock while carried: %s\n",
+           resting ? "reacts" : "MISSED", carried ? "REACTS (wrong)" : "ignored");
+    if (!resting || carried) ++fails;
+  }
   printf("\nWake from sleep: ms after boot until the face turns on (boot finishes 0.4 s into the shake)\n");
   for (float A : amps) for (float f : {3.0f, 5.0f}) {
     ms = runWake(*new Shake(A, f), .7f);

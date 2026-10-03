@@ -12,9 +12,19 @@
 // still counts:
 //   * strokes: strong pushes that reverse direction, each within SHAKE_GAP_MS
 //   * strength: a running average of how hard it is shaken, held high
+// It is built to ignore being carried: walking never makes a stroke, and the
+// odd stroke from running only sloshes the eyes. Only a real back-and-forth
+// (STARTLE, then DIZZY) changes the mood, and a knock (BUMP) only counts when
+// it was sitting calmly before.
 class ShakeDetector {
  public:
-  enum Event : uint8_t { NONE, FIRST_STROKE, STROKE, DIZZY };
+  enum Event : uint8_t {
+    NONE,
+    STROKE,   // one strong push: slosh the eyes
+    STARTLE,  // a second push back the other way: a real shake has begun
+    DIZZY,    // a full shake
+    BUMP      // a sharp knock while it was resting
+  };
 
   float strength = 0;   // m/s^2 above SHAKE_NOISE_MS2, smoothed (~0.35 s)
   uint8_t strokes = 0;  // strokes in the current shake
@@ -29,13 +39,20 @@ class ShakeDetector {
 
     if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
     Event ev = NONE;
+    // A knock on a resting star (not a step while it is carried).
+    bool wasCalm = !lastBusyAt || now - lastBusyAt > 1000;
+    if (jolt > BUMP_MS2 && wasCalm && (!lastBumpAt || now - lastBumpAt > 1500)) {
+      lastBumpAt = now;
+      ev = BUMP;
+    }
+    if (strength > 1.0f || jolt > SHAKE_NOISE_MS2 * 1.5f) lastBusyAt = now;
     if (jolt > SHAKE_STROKE_MS2 && (!lastStrokeAt || now - lastStrokeAt > 60)) {
       float dot = lin[0] * dir[0] + lin[1] * dir[1] + lin[2] * dir[2];
       if (strokes == 0 || dot < 0) {
         ++strokes;
         for (int i = 0; i < 3; ++i) dir[i] = lin[i];
         lastStrokeAt = now;
-        ev = strokes == 1 ? FIRST_STROKE : STROKE;
+        if (ev != BUMP) ev = strokes == 2 ? STARTLE : STROKE;
       }
     }
     strongSince = strength > SHAKE_DIZZY_STRENGTH ? (strongSince ? strongSince : now) : 0;
@@ -55,7 +72,7 @@ class ShakeDetector {
 
  private:
   float dir[3] = {0, 0, 0};
-  uint32_t lastSampleAt = 0, lastStrokeAt = 0, strongSince = 0;
+  uint32_t lastSampleAt = 0, lastStrokeAt = 0, strongSince = 0, lastBusyAt = 0, lastBumpAt = 0;
 };
 
 // ---- Twist: quick back-and-forth turns around either axis across the screen ----
@@ -152,7 +169,7 @@ class ShakeWakeCheck {
     }
     float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
     ShakeDetector::Event ev = det.feed(lin, spin, now);
-    if (ev == ShakeDetector::FIRST_STROKE || ev == ShakeDetector::STROKE) {
+    if (ev == ShakeDetector::STROKE || ev == ShakeDetector::STARTLE) {
       ++jolts;
       lastJolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
     }

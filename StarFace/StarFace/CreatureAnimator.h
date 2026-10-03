@@ -48,7 +48,15 @@ class CreatureAnimator {
   // ---- inputs ----
   void setTilt(float x, float y) { tiltX = x; tiltY = y; }
   void setPointer(float x, float y, uint32_t now);
-  void setPointerHeld(bool held) { pointerHeld = held; }
+  // A finger is on the screen. The longer it stays, the angrier it gets.
+  void setPointerHeld(bool held, uint32_t now) {
+    if (held && !pointerHeld) holdSince = now;
+    pointerHeld = held;
+  }
+  float annoyance() const { return holdAnnoy; }  // 0 calm .. 1 furious, from holding
+  // Let go after being held: a huff proportional to how annoyed it got, then
+  // it cools down over ANGER_COOLDOWN_S.
+  void huff(float amount, uint32_t now);
   void setTouchPoint(int x, int y) { touchX = x; touchY = y; }
   void setSwipe(int sx, int sy) { swipeX = sx; swipeY = sy; }
   void applyInertia(float ax, float ay);  // gravity-free device acceleration, m/s^2
@@ -149,8 +157,10 @@ class CreatureAnimator {
 
   // Touch context
   float pointerX = 0, pointerY = 0;
-  uint32_t pointerAt = 0;
+  uint32_t pointerAt = 0, holdSince = 0;
   bool pointerHeld = false;
+  float holdAnnoy = 0;
+  float angerResidue = 1;          // grumpiness left when an angry spell ends
   int touchX = 120, touchY = 120;
   int swipeX = 0, swipeY = 0;
 

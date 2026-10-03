@@ -7,13 +7,15 @@ and animation timing can be checked without flashing the board.
 ```sh
 ./build.sh                      # needs g++
 ./preview sheet frames          # one settled frame per expression -> frames/*.ppm
-./preview strip frames shake    # timed sequence: blink, wake, sleep, shake, rattle, surprised, angry, gaze
+./preview strip frames shake    # timed sequence: blink, wake, sleep, shake, rattle, hold, surprised, angry, gaze
 pip install pillow
 python3 sheet.py out.png frames/*.ppm --cols 4   # contact sheet, cropped to the round panel
 python3 make_previews.py frames                  # refresh the images used in the main README
 ```
 
-`./run_tests.sh` runs two checks on the same sources: `shake_test` feeds
+`./run_tests.sh` runs three checks on the same sources: `touch_test` plays
+touch-controller report streams (taps, flicks, long holds that wander, lost
+lift reports) through the sketch's finger tracker; `shake_test` feeds
 simulated shakes, wrist flicks, walking, running and knocks through the
 sketch's shake and twist detectors (awake, and the wake-from-sleep check) at
 the slow sample rates the render loop allows; `soak_test` drives the animator

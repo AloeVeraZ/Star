@@ -2,6 +2,13 @@
 #include <Arduino.h>
 #include "FaceConfig.h"
 
+// Eye styles, each with its own look and personality (see CreatureAnimator).
+enum EyeStyle : uint8_t {
+  STYLE_NOVA,  // glowing orb, dark pupil in a ring of light   -- calm and curious
+  STYLE_HALO,  // hollow neon ring, bright floating dot pupil  -- shy
+  STYLE_BLIP,  // glowing capsule with scanlines, no pupil     -- playful
+  STYLE_CAT,   // glowing orb with a slit pupil                -- sassy
+};
 static constexpr uint8_t EYE_LOOK_COUNT = 4;
 
 // Final geometry of one eye for one frame. Everything is float so slow motion
@@ -21,6 +28,7 @@ struct EyeGeom {
   float blink;          // 0..1 blink closure: the iris squashes with the eye
   float spiral;         // 0..1 dizzy spiral replaces the iris and pupil
   float spiralPhase;    // spiral rotation, radians
+  uint8_t style;        // EyeStyle
 };
 
 float lookHalfWidth(uint8_t look);

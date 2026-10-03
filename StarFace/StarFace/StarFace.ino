@@ -13,6 +13,7 @@
 #include "EyeRenderer.h"
 #include "CreatureAnimator.h"
 #include "ShakeDetector.h"
+#include "TouchTracker.h"
 
 // Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round).
 // Hardware, input and power live here; all eye animation is in CreatureAnimator,
@@ -38,7 +39,9 @@ static constexpr int LOW_BATTERY_PERCENT = 3;    // a nap at or below this becom
 static constexpr uint32_t BATTERY_CHECK_MS = 60000;
 
 static constexpr uint32_t TOUCH_TWO_PRESS_MS = 3000;
-static constexpr uint8_t WOM_THRESHOLD_MG = 90; // coarse low-power alert; gyro verifies the twist
+// Coarse low-power motion alarm (max 255). Higher means walking wakes the CPU
+// less often for a (dark-screen) shake check; any real shake is far above it.
+static constexpr uint8_t WOM_THRESHOLD_MG = 200;
 static constexpr float TILT_ACTIVITY_DELTA = .55f; // held orientation change, not a walking jostle
 static constexpr uint32_t TILT_ACTIVITY_HOLD_MS = 300;
 static constexpr int IMU_WAKE_PIN = 3;    // QMI8658 INT2, active low in WoM
@@ -49,12 +52,11 @@ bool sleepPreparing = false, deepSleepPlanned = false;
 bool imuReady = false, wokeByShake = false;
 float tiltX = 0, tiltY = 0;
 float linX = 0, linY = 0; // smoothed gravity-free acceleration
-int touchStartX = -1, touchStartY = -1;
-uint32_t touchStartAt = 0;
+TouchTracker finger;
 uint32_t lastTouchActionAt = 0, lastSwipeAt = 0;
 uint32_t sleepRetryAt = 0, lastBatteryCheck = 0;
 uint8_t eyeLook = 0, palette = 0, personality = 0, tapStreak = 0;
-uint32_t lastTapAt = 0, lastLongAt = 0;
+uint32_t lastTapAt = 0;
 float dieTempC = 25.0f, batteryVolts = 0;
 int batteryPercent = -1;
 uint32_t lastTempRead = 0, coldSince = 0, lastColdReaction = 0;
@@ -67,8 +69,8 @@ void chooseLook(uint8_t look, uint8_t color, bool save, bool instant) {
   palette = color % EYE_PALETTE_COUNT;
   creature.changeLook(eyeLook, palette, instant);
   if (save) {
-    prefs.putUChar("look", eyeLook);
-    prefs.putUChar("colorV2", palette);
+    prefs.putUChar("styleV3", eyeLook);
+    prefs.putUChar("colorV3", palette);
   }
 }
 
@@ -185,80 +187,67 @@ void finishTap(int x, int y, uint32_t now) {
   if (now - lastTouchActionAt < 75) return;
   lastTouchActionAt = now;
   pointAt(x, y, now);
-  tapStreak = now - lastTapAt < 430 ? min(3, int(tapStreak) + 1) : 1;
-  if (tapStreak >= 3) { react(ANXIOUS, now, 1300); tapStreak = 0; }
+  tapStreak = now - lastTapAt < 430 ? min(4, int(tapStreak) + 1) : 1;
+  lastTapAt = now;
+  if (tapStreak >= 4) {
+    // Four quick taps: blink into the next eye style (and its personality).
+    react(LOOK_CHANGE, now, 1400);
+    uint8_t next = (eyeLook + 1) % EYE_LOOK_COUNT;
+    chooseLook(next, STYLE_PALETTE[next], true, false);
+    tapStreak = 0;
+  } else if (tapStreak == 3) react(ANXIOUS, now, 1300);
   else if (tapStreak == 2) react(SURPRISED, now, 900);
   else react(BOOP, now, 680);
-  lastTapAt = now;
+}
+
+// A finger lifted after being held (no tap, no swipe).
+void finishHold(const TouchTracker::Result &r, uint32_t now) {
+  float anger = creature.annoyance();
+  if (anger > .35f) {
+    // Held on too long: a huff, then it cools down.
+    creature.huff(anger, now);
+    Serial.printf("Let go after %lu ms: huff %.2f\n", (unsigned long)r.heldMs, anger);
+  } else if (r.heldMs < HOLD_ANGER_START_MS) {
+    react(PETTED, now, 1100); // a short, gentle press feels nice
+  }
 }
 
 void handleTouch(uint32_t now) {
-  if (!touch.available()) return;
-  auto d = touch.data;
-  lastActivity = now;
-  // Even if the controller reports a partial/invalid coordinate, its IRQ is
-  // real activity. Never finish closing the eyes while a finger is present.
-  if (cancelSleepForTouch(now)) { touchStartX = -1; return; }
-  if (d.x < 0 || d.x >= W || d.y < 0 || d.y >= H) return;
-
-  // The CST816S reports completed swipes; use the same choreography for
-  // coordinates from contact/up events when its gesture recognizer misses one.
-  if (d.gestureID >= 1 && d.gestureID <= 4) {
-    int sx = d.gestureID == 3 ? -1 : d.gestureID == 4 ? 1 : 0;
-    int sy = d.gestureID == 1 ? -1 : d.gestureID == 2 ? 1 : 0;
-    beginSwipe(touchStartX < 0 ? 120 - sx * 65 : touchStartX,
-               touchStartY < 0 ? 120 - sy * 65 : touchStartY,
-               sx * 110, sy * 110, now);
-    touchStartX = -1;
-    return;
-  }
-  if (d.gestureID == 0x0B) {
-    pointAt(d.x, d.y, now);
-    react(SURPRISED, now, 850);
-    touchStartX = -1;
-    lastTouchActionAt = now;
-    lastTapAt = now;
-    tapStreak = 2;
-    return;
-  }
-  if (d.gestureID == 0x0C) {
-    creature.setTouchPoint(d.x, d.y);
-    if (lastLongAt && now - lastLongAt < 3500) {
-      react(LOOK_CHANGE, now, 1400);
-      // Shape and color switch while the eyes are shut.
-      chooseLook(eyeLook + 1, palette + 1, true, false);
-      lastLongAt = 0;
-    } else {
-      react(PETTED, now, 1600);
-      lastLongAt = now;
+  TouchTracker::Result r;
+  if (touch.available()) {
+    auto d = touch.data;
+    lastActivity = now;
+    // Even if the controller reports a partial/invalid coordinate, its IRQ is
+    // real activity. Never finish closing the eyes while a finger is present.
+    if (cancelSleepForTouch(now)) {
+      finger.ignoreUntilLift(now); // this touch woke it; don't also follow it
+      return;
     }
-    touchStartX = -1;
-    lastTouchActionAt = now;
-    return;
+    bool valid = d.x >= 0 && d.x < W && d.y >= 0 && d.y < H;
+    r = finger.feed(d.x, d.y, d.event, d.gestureID, valid, now);
+  } else {
+    r = finger.poll(now); // a lift report can go missing
   }
-  if (d.gestureID == 0x05) {
-    finishTap(d.x, d.y, now);
-    touchStartX = -1;
-    return;
-  }
-  if (d.event == 0) {
-    touchStartX = d.x;
-    touchStartY = d.y;
-    touchStartAt = now;
-    pointAt(d.x, d.y, now);
-    react(FOLLOWING, now, 1500);
-    return;
-  }
-  if (d.event == 2 && touchStartX >= 0) {
-    creature.setPointer((d.x - 120) / 80.0f, (d.y - 120) / 80.0f, now);
-    return;
-  }
-  if (d.event == 1 && touchStartX >= 0) {
-    int dx = d.x - touchStartX, dy = d.y - touchStartY;
-    if (dx * dx + dy * dy > 28 * 28 && now - touchStartAt < 1400) {
-      beginSwipe(touchStartX, touchStartY, dx, dy, now);
-    } else finishTap(d.x, d.y, now);
-    touchStartX = -1;
+  switch (r.kind) {
+    case TouchTracker::PRESS:
+      pointAt(r.x, r.y, now);
+      react(FOLLOWING, now, 600); // follows the finger for as long as it stays down
+      break;
+    case TouchTracker::MOVE:
+      pointAt(r.x, r.y, now);
+      break;
+    case TouchTracker::TAP:
+      finishTap(r.x, r.y, now);
+      break;
+    case TouchTracker::SWIPE:
+      if (creature.annoyance() > .35f) finishHold(r, now); // too cross to play along
+      else beginSwipe(r.x - int(r.dx), r.y - int(r.dy), int(r.dx), int(r.dy), now);
+      break;
+    case TouchTracker::RELEASE:
+      finishHold(r, now);
+      break;
+    default:
+      break;
   }
 }
 
@@ -307,11 +296,12 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   }
 
   // ---- Shaking while awake ----
-  // How hard it is being shaken drives a live rattle in the eyes from the very
-  // first stroke; each stroke throws the eyes the other way; a real shake
-  // (see ShakeDetector) makes it dizzy, then angry, then it calms down.
+  // How hard it is being shaken drives a live rattle in the eyes; a single
+  // strong push only sloshes them (so being carried, even running, stays
+  // calm); a push back the other way startles it; a real shake (see
+  // ShakeDetector) makes it dizzy, then angry, then it calms down.
   static ShakeDetector shaker;
-  static uint32_t lastBumpAt = 0, lastLogAt = 0;
+  static uint32_t lastLogAt = 0;
   float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
   ShakeDetector::Event ev = shaker.feed(lin, spin, now);
   if (shaker.rattle() > 0) creature.shake(shaker.rattle());
@@ -320,25 +310,29 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
     Serial.printf("shake: strength %.1f (dizzy at %.1f)  jolt %.1f m/s^2  spin %.1f rad/s  strokes %u\n",
                   shaker.strength, SHAKE_DIZZY_STRENGTH, jolt, spin, shaker.strokes);
   }
-  if (ev != ShakeDetector::NONE) {
-    lastActivity = now; // being shaken is an interaction
+  if (ev == ShakeDetector::DIZZY) {
+    // Wobble, spiral eyes, glare, calm down. Keep shaking: it spins again.
+    lastActivity = now;
     sleepPreparing = false;
-    if (ev == ShakeDetector::DIZZY) {
-      // Wobble, spiral eyes, glare, calm down. Keep shaking: it spins again.
-      creature.impact(lin[0], lin[1]);
-      bool started = react(DIZZY, now, DIZZY_ANIM_MS);
-      if (LOG_SHAKE) Serial.println(started ? "shake: DIZZY" : "shake: (already dizzy)");
-      return;
-    }
+    creature.impact(lin[0], lin[1]);
+    bool started = react(DIZZY, now, DIZZY_ANIM_MS);
+    if (LOG_SHAKE) Serial.println(started ? "shake: DIZZY" : "shake: (already dizzy)");
+    return;
+  }
+  if (ev == ShakeDetector::STARTLE) {
+    lastActivity = now; // a deliberate shake has begun: an interaction
+    sleepPreparing = false;
     creature.impact(lin[0] * .6f, lin[1] * .6f);
-    if (ev == ShakeDetector::FIRST_STROKE && creature.mood() != DIZZY && creature.mood() != ANGRY)
-      react(SURPRISED, now, 650); // whoa! -- the first stroke startles it
+    if (creature.mood() != DIZZY && creature.mood() != ANGRY) react(SURPRISED, now, 650);
+    return;
+  }
+  if (ev == ShakeDetector::STROKE) {
+    creature.impact(lin[0] * .45f, lin[1] * .45f); // just slosh; not an interaction
     return;
   }
   if (sleepPreparing) return;
-  if (jolt > BUMP_MS2 && now - lastBumpAt > 1500) {
-    // A knock: the eyes recoil and the creature looks startled.
-    lastBumpAt = now;
+  if (ev == ShakeDetector::BUMP) {
+    // A knock on the resting star: the eyes recoil and it looks startled.
     creature.impact(lin[0] * .6f, lin[1] * .6f);
     creature.reactPassive(SURPRISED, now, 520);
   } else if (jolt > PICKUP_MS2 && stillFor > 15000) {
@@ -632,6 +626,9 @@ bool confirmMotionWake() {
     if (LOG_SHAKE && shake.jolts != before)
       Serial.printf("wake stroke %u: %.1f m/s^2\n", shake.jolts, shake.lastJolt);
     if (woke) return true;
+    // Walking can trip the motion alarm; without any shake stroke or twist
+    // soon after boot, go straight back to sleep to save the battery.
+    if (!shake.jolts && !twist.active() && now - began > 900) break;
     delay(10);
   }
   if (LOG_SHAKE) Serial.printf("wake check: %u shake stroke(s), not enough\n", shake.jolts);
@@ -706,15 +703,19 @@ void setup() {
   DEV_SET_PWM(0);
   LCD_1IN28_Init(HORIZONTAL);
   touch.begin(FALLING);
+  // The press that woke it may still be on the screen: don't treat it as a
+  // new touch to follow.
+  if (touchConfirmed) finger.ignoreUntilLift(millis());
   Wire.setClock(400000);
   configureTouchWake();
   randomSeed(esp_random());
   prefs.begin("starface", false);
   uint64_t mac = ESP.getEfuseMac();
-  personality = (mac >> 16) % 3;
-  eyeLook = prefs.getUChar("look", uint8_t(mac & 3)) % EYE_LOOK_COUNT;
-  palette = prefs.getUChar("colorV2", DEFAULT_EYE_COLOR) % EYE_PALETTE_COUNT;
-  Serial.printf("Eye look=%u palette=%u personality=%u\n", eyeLook, palette, personality);
+  // The eye style sets the personality; the style and colour are remembered.
+  eyeLook = prefs.getUChar("styleV3", DEFAULT_EYE_STYLE) % EYE_LOOK_COUNT;
+  palette = prefs.getUChar("colorV3", STYLE_PALETTE[eyeLook]) % EYE_PALETTE_COUNT;
+  personality = eyeLook;
+  Serial.printf("Eye style=%u palette=%u\n", eyeLook, palette);
   lastActivity = millis();
   renderer.begin(BlackImage, LCD_1IN28_DisplayWindows);
   creature.begin(&renderer, eyeLook, palette, personality,
@@ -738,7 +739,7 @@ void loop() {
   handleTouch(now);
   if (sleepPreparing && digitalRead(TOUCH_WAKE_PIN) == LOW) cancelSleepForTouch(now);
   handleMotion(now);
-  creature.setPointerHeld(touchStartX >= 0);
+  creature.setPointerHeld(finger.tracking(), now);
   if (now - lastBatteryCheck >= BATTERY_CHECK_MS) {
     lastBatteryCheck = now;
     readBattery();

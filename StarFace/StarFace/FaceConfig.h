@@ -44,20 +44,25 @@ static constexpr float DOUBLE_BLINK_CHANCE = 0.10f;
 static constexpr float ANGER_COOLDOWN_S = 4.0f;   // grumpy lids linger this long after anger
 
 // ---- Look ----------------------------------------------------------------------
-static constexpr uint8_t DEFAULT_EYE_COLOR = 0;   // index into EYE_PALETTE
+// The eyes are light, not paint: a glowing body, a neon outline and a soft
+// bloom on black. Four styles, each with its own personality (four quick taps
+// cycles them): 0 NOVA calm & curious, 1 HALO shy, 2 BLIP playful, 3 CAT sassy.
+static constexpr uint8_t DEFAULT_EYE_STYLE = 0;
 static constexpr uint8_t EYE_PALETTE_COUNT = 7;
 static constexpr uint8_t EYE_PALETTE[EYE_PALETTE_COUNT][3] = {
-  {195, 150, 255}, // 0 soft lilac (default)
-  {255, 135, 196}, // 1 pink
-  {80, 221, 232},  // 2 cyan
-  {105, 158, 255}, // 3 blue
-  {255, 94, 109},  // 4 red
-  {225, 235, 255}, // 5 white
-  {255, 204, 96}   // 6 yellow
+  {124, 40, 255},  // 0 deep purple (default)
+  {84, 64, 255},   // 1 ultraviolet
+  {214, 60, 255},  // 2 orchid
+  {150, 84, 255},  // 3 violet
+  {255, 64, 170},  // 4 neon pink
+  {40, 210, 255},  // 5 electric cyan
+  {255, 170, 40},  // 6 amber
 };
-static constexpr float GLOW_STRENGTH = 0.72f;     // brightness of the halo at the eye edge
-static constexpr float GLOW_FALLOFF = 5.5f;       // px for the halo to fade to ~37%
-static constexpr float GLOW_EXTENT = 16.0f;       // halo fades to zero by this distance (cost grows with it)
+// The colour each style wears (index into EYE_PALETTE). All purples by default.
+static constexpr uint8_t STYLE_PALETTE[4] = {0, 1, 2, 3};
+static constexpr float GLOW_STRENGTH = 1.15f;      // brightness of the bloom at the eye edge
+static constexpr float GLOW_FALLOFF = 7.0f;       // px for the bloom to fade to ~37%
+static constexpr float GLOW_EXTENT = 18.0f;       // bloom fades to zero by this distance (cost grows with it)
 static constexpr bool DITHER = true;              // ordered dithering hides RGB565 banding
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
@@ -75,6 +80,18 @@ static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 450; // ...kept up for this long
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster than this counts as shaking
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
+
+// ---- Touch -------------------------------------------------------------------------
+// While a finger is down the eyes follow it. Releasing after a quick flick is
+// a swipe in the flick's direction; holding on makes it more and more angry.
+static constexpr uint32_t TAP_MAX_MS = 350;       // a tap is shorter than this...
+static constexpr float TAP_MAX_MOVE_PX = 22;      // ...and moves less than this
+static constexpr float SWIPE_MIN_PX = 35;         // a swipe flicks at least this far...
+static constexpr float SWIPE_MIN_SPEED = 250;     // ...at least this fast (px/s) at the end
+static constexpr uint32_t SWIPE_MAX_SHORT_MS = 700; // or: a press this short that moved far
+static constexpr uint32_t HOLD_ANGER_START_MS = 1200; // holding longer than this annoys it...
+static constexpr uint32_t HOLD_ANGER_FULL_MS = 4500;  // ...and by this long it is furious
+static constexpr uint32_t TOUCH_RELEASE_TIMEOUT_MS = 250; // no report this long = finger lifted
 
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to

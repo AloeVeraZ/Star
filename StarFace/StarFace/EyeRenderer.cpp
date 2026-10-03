@@ -15,7 +15,6 @@ static constexpr int SW = 240, SH = 240;
 // ---- Shape constants (px) ----
 static constexpr float MIN_HALF_HEIGHT = 1.9f;   // a shut eye stays a soft glowing arc
 static constexpr float CLOSE_LINE_DROP = 0.20f;  // shut line sits below centre: the upper lid travels further
-static constexpr float RIM_WIDTH = 7.0f;         // saturated glowing band just inside the edge
 static constexpr float LID_SHADOW = 8.0f;        // soft shade under the upper lid
 static constexpr float LID_ROUNDING = 4.0f;      // px of rounding where a lid meets the eye outline
 static constexpr float CLOSED_WIDTH = 0.84f;     // a shut eye is this much narrower (lid corners meet)
@@ -23,15 +22,13 @@ static constexpr float IRIS_DROP = 0.10f;        // irises sit a touch low, whic
 static constexpr float SPIRAL_TURNS = 2.6f;      // arms of the dizzy spiral across the iris radius
 static constexpr float SPIRAL_HALF_WIDTH = 0.21f; // spiral line half width, in turns
 // Reciprocals for the shading ramps (no divisions in the per-pixel loop).
-static constexpr float INV_RIM = 1.0f / (RIM_WIDTH + .5f);
 static constexpr float INV_SHADOW = 1.0f / (LID_SHADOW + .5f);
-static constexpr float INV_SHADOW_LOW = 1.0f / (LID_SHADOW * .6f + .5f);
 static constexpr float INV_EDGE_BAND = 1.0f / (SCREEN_RADIUS - SAFE_RADIUS);
 
-// Eye looks, as multiples of the configured base size.
-static const float LOOK_W[EYE_LOOK_COUNT] = {1.00f, 1.07f, 0.88f, 1.03f};
-static const float LOOK_H[EYE_LOOK_COUNT] = {1.00f, 0.90f, 1.04f, 0.82f};
-static const float LOOK_IRIS[EYE_LOOK_COUNT] = {1.00f, 1.00f, 0.84f, 1.00f};
+// Eye shapes per style (NOVA, HALO, BLIP, CAT), as multiples of the base size.
+static const float LOOK_W[EYE_LOOK_COUNT] = {1.00f, 1.00f, 1.06f, 1.02f};
+static const float LOOK_H[EYE_LOOK_COUNT] = {1.00f, 0.96f, 0.84f, 0.98f};
+static const float LOOK_IRIS[EYE_LOOK_COUNT] = {1.00f, 0.92f, 1.00f, 1.05f};
 
 float lookHalfWidth(uint8_t look) { return EYE_HALF_WIDTH * LOOK_W[look % EYE_LOOK_COUNT]; }
 float lookHalfHeight(uint8_t look) { return EYE_HALF_HEIGHT * LOOK_H[look % EYE_LOOK_COUNT]; }
@@ -153,23 +150,40 @@ inline float smax(float a, float b, float k, float quarterInvK) {
 float colShift[SW], upY[SW], upN[SW], loY[SW], loN[SW];
 } // namespace
 
+// Per-style shape and shading parameters (see EyeStyle in EyeRenderer.h).
+struct StyleSpec {
+  float round;      // corner rounding of the outline, px (big = capsule)
+  float band;       // edge band shaded by distance (fast path is deeper than this)
+  float regionX, regionY; // pupil effect extent, in iris radii
+  float shadow;     // strength of the soft shade under the upper lid
+};
+static const StyleSpec STYLES[EYE_LOOK_COUNT] = {
+  {3.0f, 7.0f, 1.45f, 1.45f, .16f},  // NOVA: glowing orb, deep pupil in a ring of light
+  {3.0f, 13.0f, 2.3f, 2.3f, 0.0f},   // HALO: hollow neon ring, bright dot pupil
+  {15.0f, 7.0f, 1.25f, 1.25f, .10f}, // BLIP: glowing capsule, scanlines, light spot
+  {3.0f, 7.0f, 1.15f, 2.0f, .16f},   // CAT: glowing orb, slit pupil
+};
+
 // One eye = ellipse ∩ below the upper lid ∩ above the lower lid, all bent by
 // `bend`. d is an approximate signed distance in px (negative inside); it gives
 // anti-aliased coverage at the edge and the halo outside it.
 void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
+  const uint8_t style = e.style % EYE_LOOK_COUNT;
+  const StyleSpec &st = STYLES[style];
   float cy, h;
   eyeDrawnExtent(e, cy, h);
   const float cx = e.x;
   const float ry = fmaxf(4.0f, e.ry);
   const float rx = fmaxf(4.0f, e.rx) * anim::mix(CLOSED_WIDTH, 1.0f, smoothstep(0.0f, .3f, e.open));
 
-  // A slightly smaller ellipse grown by `round`: a shut eye gets soft round tips.
-  const float round = fminf(h * .85f, 3.0f);
+  // A smaller ellipse grown by `round`: rounder corners, and a shut eye gets
+  // soft round tips.
+  const float round = fminf(h * .85f, fminf(st.round, rx * .45f));
   const float crx = rx - round, cry = fmaxf(.35f, h - round);
   const float icrx2 = 1.0f / (crx * crx), icry2 = 1.0f / (cry * cry);
   const float minR = fminf(crx, cry);
-  const float innerK = fmaxf(0.0f, 1.0f - (RIM_WIDTH + 1.0f) / minR);
-  const float qInner = innerK * innerK; // q below this: deeper than the rim band
+  const float innerK = fmaxf(0.0f, 1.0f - (st.band + 1.0f) / minR);
+  const float qInner = innerK * innerK; // q below this: deeper than the edge band
   const bool thin = cry < crx * .5f;
 
   // Lids flatten away as the eye shuts so a closed eye is one clean arc.
@@ -183,22 +197,24 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float nose = leftEye ? 1.0f : -1.0f; // +x points at the nose for the left eye
   const float bend = e.bend;
 
-  // ---- Colours for this frame ----
+  // ---- Colours for this frame: everything is light, not paint ----
   const float heat = clamp01(e.heat);
-  Col c = mixc({base.r, base.g, base.b}, {255, 66, 58}, heat * .6f);
   const Col white = {255, 255, 255};
-  const Col top = mixc(c, white, .80f), bottom = mixc(c, white, .42f);
-  const Col rim = mixc(c, white, .10f);
-  const Col irisDeep = scalec(c, .20f), irisLight = scalec(c, .64f);
-  const Col irisRing = scalec(c, .09f), pupilC = scalec(c, .04f);
+  const Col c = mixc({base.r, base.g, base.b}, {255, 50, 70}, heat * .65f); // the eye's colour
+  const Col hot = mixc(c, white, .50f);       // white-hot core
+  const Col neon = mixc(c, white, .42f);      // bright outline
+  const Col dark = scalec(c, .10f);           // unlit inside (HALO)
+  const Col pupilC = scalec(c, .05f);         // near-black, tinted
+  const Col pupilDeep = mixc(scalec(c, .16f), {10, 0, 40}, .5f); // NOVA: deep indigo pupil
   const Col spark = {255, 255, 255};
   const float glowGain = GLOW_STRENGTH * fmaxf(0.0f, e.glow) / 255.0f;
   const Col glowC = scalec(c, glowGain);
+  // Radial body gradient (NOVA, CAT): hot core fading to the deep colour.
+  Col radial[33];
+  for (int i = 0; i <= 32; ++i) radial[i] = mixc(hot, c, ss01(i / 32.0f * 1.15f - .1f));
 
-  // ---- Iris, pupil and highlights (eye-local coordinates) ----
-  // The lids cover the iris as the eye narrows; only the last few px fade it
-  // out so the shut eye is a clean glowing line. During a blink the iris
-  // squashes with the eye instead (squash & stretch).
+  // ---- Pupil effects (eye-local coordinates) ----
+  // They shrink into the lids as the eye shuts and squash with a blink.
   const float irisShow = smoothstep(2.5f, 7.0f, h);
   const float irisR = e.iris;
   const float blinkSquash = 1.0f - .8f * clamp01(e.blink);
@@ -206,22 +222,27 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float travelX = fmaxf(0.0f, rx - irisR * .92f) * PUPIL_TRAVEL;
   const float travelY = fminf(fmaxf(0.0f, ry - irisR) * PUPIL_TRAVEL * .75f, h * .55f);
   const float iox = px * travelX, ioy = py * travelY + irisR * IRIS_DROP;
-  // Foreshortening: an iris looking sideways is a narrower oval.
+  // Looking sideways squeezes the pupil a little (it is on a curved surface).
   const float irx = irisR * (1.0f - .14f * fabsf(px));
   const float iry = irisR * 1.06f * (1.0f - .07f * fabsf(py)) * blinkSquash;
   const float iirx = 1.0f / irx, iiry = 1.0f / iry;
-  const float prx = irx * .50f, pry = iry * .53f, pupilUp = iry * .04f;
-  const float iprx = 1.0f / prx, ipry = 1.0f / pry;
-  // Highlights reflect a fixed light, so they lag the iris (parallax).
+  const float regX = irx * st.regionX + 1.0f, regY = iry * st.regionY + 1.0f;
   const float spiral = clamp01(e.spiral);
   const float spiralPx = irisR / SPIRAL_TURNS;     // px per spiral turn
   const float spiralShift = e.spiralPhase * (1.0f / anim::TAU_F);
-  const Col spiralBg = mixc(c, white, .55f);
-  const float hlShow = smoothstep(8.0f, 18.0f, h) * (1.0f - .75f * spiral);
+  // A crisp sparkle (NOVA, CAT) lags the pupil a little: a fixed light source.
+  const bool hasSpark = style == STYLE_NOVA || style == STYLE_CAT || style == STYLE_BLIP;
+  const float hlShow = hasSpark ? smoothstep(8.0f, 18.0f, h) * (1.0f - .75f * spiral) : 0.0f;
   const float hlSquash = 1.0f / fmaxf(.2f, blinkSquash);
   const float hlSquashInv = fmaxf(.2f, blinkSquash);
-  const float h1x = iox * .86f - irisR * .32f, h1y = ioy * .86f - irisR * .38f, h1r = irisR * .29f;
-  const float h2x = iox * .86f + irisR * .36f, h2y = ioy * .86f + irisR * .36f, h2r = irisR * .12f;
+  float h1x, h1y, h1r, h2x, h2y, h2r;
+  if (style == STYLE_BLIP) { // a glint on the capsule's upper corner
+    h1x = -rx * .48f; h1y = -h * .50f; h1r = 3.2f * EYE_PX_SCALE;
+    h2x = -rx * .30f; h2y = -h * .62f; h2r = 1.6f * EYE_PX_SCALE;
+  } else {
+    h1x = iox * .86f - irisR * .30f; h1y = ioy * .86f - irisR * .34f; h1r = irisR * .22f;
+    h2x = iox * .86f + irisR * .30f; h2y = ioy * .86f + irisR * .30f; h2r = irisR * .09f;
+  }
 
   // ---- Bounds, clipped to the dirty window ----
   int x0 = max(clip.x0, int(floorf(cx - rx - GLOW_EXTENT)));
@@ -255,6 +276,9 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float safe2 = SAFE_RADIUS * SAFE_RADIUS;
   const float screen2 = (SCREEN_RADIUS + .5f) * (SCREEN_RADIUS + .5f);
   const float glowEnd = GLOW_EXTENT - .3f;
+  const bool radialBody = style == STYLE_NOVA || style == STYLE_CAT;
+  const float shadowBand = LID_SHADOW;
+  const float inv2h = 1.0f / (2.0f * h);
 
   for (int y = y0; y <= y1; ++y) {
     // Only pixels inside the round panel are shaded.
@@ -263,10 +287,14 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
     if (span <= 0) continue;
     float half = sqrtf(span);
     int xa = max(x0, int(ceilf(SCREEN_CX - half))), xb = min(x1, int(floorf(SCREEN_CX + half)));
-    float v = smoothstep(clamp01((y - (cy - h)) / (2.0f * h)));
-    const Col row = mixc(top, bottom, v);
-    // Plain interior pixels need no shading at all: the row colour, already
-    // dithered for each of the four x phases.
+    float v = clamp01((y - (cy - h)) * inv2h); // 0 top .. 1 bottom of the eye
+    // Light falls a little from top to bottom; BLIP adds retro scanlines.
+    float rowShade = 1.06f - .16f * v;
+    Col row;
+    if (style == STYLE_HALO) row = dark;
+    else if (style == STYLE_BLIP) {
+      row = scalec(mixc(hot, c, ss01(v * 1.1f)), (y % 3 == 0) ? .74f : 1.0f);
+    } else row = c; // radial bodies are shaded per pixel
     uint16_t rowPacked[4];
     for (int i = 0; i < 4; ++i) rowPacked[i] = pack565(row.r, row.g, row.b, i, y);
     uint16_t *line = fb + y * SW;
@@ -281,15 +309,22 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
       float dU = (upY[x] - y) * upN[x];
       float dL = hasLower ? (y - loY[x]) * loN[x] : -1e9f;
       float lx = dx - iox, ly = yy - ioy;
-      bool inIris = irisShow > 0 && fabsf(lx) < irx + 1.0f && fabsf(ly) < iry + 1.0f;
-      if (deep && !inIris && dU <= -LID_SHADOW && dL <= -LID_SHADOW * .6f &&
-          !(fabsf(dx - h1x) < h1r + 1.0f && fabsf(yy - h1y) < h1r * hlSquashInv + 1.0f)) {
-        line[x] = rowPacked[x & 3]; // fast path: most of the eye
+      bool inPupil = irisShow > 0 && fabsf(lx) < regX && fabsf(ly) < regY;
+      bool inSpark = hlShow > 0 && fabsf(dx - h1x) < h1r + 1.0f &&
+                     fabsf(yy - h1y) < h1r * hlSquashInv + 1.0f;
+      if (deep && !inPupil && !inSpark && dU <= -shadowBand && dL <= -shadowBand * .6f) {
+        // Fast path: most of the eye.
+        if (radialBody) {
+          Col b = scalec(radial[int(q * 32.0f)], rowShade);
+          line[x] = pack565(b.r, b.g, b.b, x, y);
+        } else {
+          line[x] = rowPacked[x & 3];
+        }
         continue;
       }
       float dE;
       if (deep) {
-        dE = -RIM_WIDTH - 1.0f;
+        dE = -st.band - 1.0f;
       } else if (q < 1e-8f) {
         dE = -minR;
       } else {
@@ -324,39 +359,56 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
       }
 
       // ---- Eye body ----
-      Col col = row;
-      if (!deep) { // brighter, more saturated band just inside the edge
-        float rt = ss01((dE + RIM_WIDTH) * INV_RIM);
-        col = mixc(col, rim, rt * rt * .75f);
+      Col col;
+      float edgeIn = -d; // px inside the visible outline (lids included)
+      if (style == STYLE_HALO) {
+        // A neon tube along the outline, dim and hollow inside.
+        float ring = ss01((edgeIn + .5f) * (1.0f / 2.0f)) * (1.0f - ss01((edgeIn - 3.0f) * (1.0f / 4.0f)));
+        float inner = 1.0f - ss01((edgeIn - 3.0f) * (1.0f / 9.0f)); // faint light spilling inward
+        col = mixc(mixc(dark, scalec(c, .55f), inner * .6f), neon, ring);
+      } else {
+        col = radialBody ? scalec(radial[int((q < 1.0f ? q : 1.0f) * 32.0f)], rowShade) : row;
+        // A thin bright outline just inside the edge, like a neon sign.
+        float line1 = ss01((edgeIn - .3f) * (1.0f / 1.4f)) * (1.0f - ss01((edgeIn - 2.2f) * (1.0f / 2.2f)));
+        col = mixc(col, neon, line1 * .7f);
       }
-      if (inIris) {
+      if (inPupil) {
         float ux = lx * iirx, uy = ly * iiry;
-        float qI = ux * ux + uy * uy;
-        float kI = fsqrt(qI);
-        float dI = qI > 1e-8f ? (kI - 1.0f) * kI * rsqrt1(ux * ux * iirx * iirx + uy * uy * iiry * iiry)
-                              : -irx;
-        float aI = clamp01(.5f - dI);
-        if (aI > 0) {
-          // Deep at the top, lit from below, with a dark limbal ring.
-          Col ic = mixc(irisDeep, irisLight, ss01((uy + .15f) * (1.0f / 1.15f)) * .9f);
-          ic = mixc(ic, irisRing, ss01((kI - .70f) * (1.0f / .30f)) * .85f);
-          float pxu = lx * iprx, pyu = (ly + pupilUp) * ipry;
-          float dP = (fsqrt(pxu * pxu + pyu * pyu) - 1.0f) * prx;
-          ic = mixc(ic, pupilC, clamp01(.5f - dP));
-          if (spiral > 0) {
-            // Dizzy: a light disc with a dark Archimedean spiral that spins.
-            float v = kI * SPIRAL_TURNS - fastAtan2(ly, lx) * (1.0f / anim::TAU_F) - spiralShift;
-            float fr = v - float(int(v));
-            if (fr < 0) fr += 1.0f;
-            float line = clamp01((SPIRAL_HALF_WIDTH - fabsf(fr - .5f)) * spiralPx + .5f);
-            Col sc = mixc(spiralBg, pupilC, line);
-            sc = mixc(sc, irisRing, ss01((kI - .86f) * (1.0f / .14f)) * .9f); // keep the dark rim
-            ic = mixc(ic, sc, spiral);
-          }
-          // As the lids meet, the iris dissolves into the glowing rim colour
-          // (never into a muddy grey).
-          if (irisShow < 1.0f) ic = mixc(rim, ic, irisShow);
-          col = mixc(col, ic, aI);
+        float kI = fsqrt(ux * ux + uy * uy); // 1 = one iris radius from the pupil centre
+        float show = irisShow;
+        if (style == STYLE_NOVA) {
+          // A deep pupil wrapped in a bright ring of light.
+          float ringGlow = 1.0f - ss01((kI - .60f) * (1.0f / .70f));
+          col = mixc(col, mixc(hot, white, .45f), ringGlow * ringGlow * .85f * show);
+          float inPup = clamp01((.60f - kI) * irx + .5f);
+          // The pupil glows faintly from its rim toward the middle.
+          Col pc = mixc(pupilDeep, scalec(c, .45f), ss01((kI - .25f) * (1.0f / .35f)) * .6f);
+          col = mixc(col, pc, inPup * show);
+        } else if (style == STYLE_HALO) {
+          // A bright floating dot with its own little glow.
+          float dotGlow = 1.0f - ss01((kI - .40f) * (1.0f / 1.6f));
+          col = mixc(col, neon, dotGlow * dotGlow * .8f * show);
+          col = mixc(col, mixc(c, white, .88f), clamp01((.40f - kI) * irx + .5f) * show);
+        } else if (style == STYLE_BLIP) {
+          // No pupil: a soft spot of extra light shows where it is looking.
+          float spot = 1.0f - ss01(kI * (1.0f / 1.2f));
+          col = mixc(col, mixc(hot, white, .5f), spot * .6f * show);
+        } else { // STYLE_CAT: a vertical slit with a glowing rim
+          float sx = lx * iirx * (1.0f / .27f), syy = ly * iiry * (1.0f / 1.15f);
+          float ks = fsqrt(sx * sx + syy * syy);
+          float rimGlow = 1.0f - ss01((ks - 1.0f) * (1.0f / .6f)); // fades out inside the region
+          col = mixc(col, hot, rimGlow * .5f * show);
+          col = mixc(col, pupilC, clamp01((1.0f - ks) * irx * .27f + .5f) * show);
+        }
+        if (spiral > 0 && kI < 1.08f) {
+          // Dizzy: a bright disc with a dark Archimedean spiral that spins.
+          float vv = kI * SPIRAL_TURNS - fastAtan2(ly, lx) * (1.0f / anim::TAU_F) - spiralShift;
+          float fr = vv - float(int(vv));
+          if (fr < 0) fr += 1.0f;
+          float arm = clamp01((SPIRAL_HALF_WIDTH - fabsf(fr - .5f)) * spiralPx + .5f);
+          Col sc = mixc(hot, pupilC, arm);
+          float disc = clamp01((1.0f - kI) * irx + .5f);
+          col = mixc(col, sc, disc * spiral * show);
         }
       }
       if (hlShow > 0) {
@@ -372,14 +424,10 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
           col = mixc(col, spark, a);
         }
       }
-      // Soft shade under the lids gives the eye depth instead of a flat cut.
-      if (dU > -LID_SHADOW) {
-        float s = ss01((dU + LID_SHADOW) * INV_SHADOW);
-        col = scalec(col, 1.0f - .34f * k * s * s);
-      }
-      if (hasLower && dL > -LID_SHADOW * .6f) {
-        float s = ss01((dL + LID_SHADOW * .6f) * INV_SHADOW_LOW);
-        col = scalec(col, 1.0f - .22f * s * s);
+      // A faint shade under the upper lid keeps the lid shape readable.
+      if (st.shadow > 0 && dU > -shadowBand) {
+        float s = ss01((dU + shadowBand) * INV_SHADOW);
+        col = scalec(col, 1.0f - st.shadow * k * s * s);
       }
 
       float a = clamp01(.5f - d);

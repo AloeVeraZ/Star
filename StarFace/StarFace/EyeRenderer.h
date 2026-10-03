@@ -19,6 +19,8 @@ struct EyeGeom {
   float glow;           // halo strength multiplier, ~1
   float heat;           // 0..1 warms the colours toward red (anger)
   float blink;          // 0..1 blink closure: the iris squashes with the eye
+  float spiral;         // 0..1 dizzy spiral replaces the iris and pupil
+  float spiralPhase;    // spiral rotation, radians
 };
 
 float lookHalfWidth(uint8_t look);

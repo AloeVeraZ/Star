@@ -27,7 +27,10 @@ static constexpr uint32_t FRAME_US = 16667;      // frame cap (~60 FPS); render 
 static constexpr uint32_t NAP_FRAME_US = 33333;  // 30 FPS is plenty while the eyes are shut
 static constexpr float MAX_FRAME_DT = .05f;      // a stall never turns into an animation jump
 static constexpr bool LOG_FPS = false;           // print frames per second over serial
-static constexpr bool LOG_SHAKE = false;         // print each shake stroke's strength (for tuning)
+// Prints shake strength while it is being shaken (silent when still). Open the
+// serial monitor at 115200 to see whether the motion sensor responds and how
+// hard your shakes are; set false once tuned.
+static constexpr bool LOG_SHAKE = true;
 
 // Power (sleep timeouts and backlight levels are in FaceConfig.h).
 static constexpr int LOW_BATTERY_PERCENT = 3;    // a nap at or below this becomes deep sleep
@@ -36,7 +39,6 @@ static constexpr uint32_t BATTERY_CHECK_MS = 60000;
 static constexpr uint32_t TOUCH_TWO_PRESS_MS = 3000;
 static constexpr uint32_t TWIST_WINDOW_MS = 3000;
 static constexpr uint32_t TWIST_MAX_PAUSE_MS = 600;
-static constexpr uint32_t TWIST_START_TIMEOUT_MS = 1200;
 static constexpr float TWIST_RATE_RAD_S = 1.2f; // about 69 degrees/s on X or Y
 static constexpr float TWIST_MIN_HALF_TURN_RAD = .25f; // about 14 degrees each way
 static constexpr uint8_t TWIST_REVERSALS_TO_WAKE = 3;
@@ -333,7 +335,7 @@ void readMotion(float a[3], float g[3]) {
 }
 
 // Reacts to how the star is moved: inertia, bumps, shakes, pick-ups and naps.
-void handleSurroundings(const float a[3], bool heldStill, uint32_t now) {
+void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint32_t now) {
   // A slow gravity estimate leaves the fast, gravity-free part of the motion.
   static bool gravityReady = false;
   static float grav[3];
@@ -372,16 +374,34 @@ void handleSurroundings(const float a[3], bool heldStill, uint32_t now) {
   // rattle in the eyes, so they react from the very first stroke. Strong
   // strokes that reverse direction count toward the dizzy spell; each one also
   // throws the eyes the other way, so they slosh with the motion.
-  static uint32_t lastSampleAt = 0, lastStrokeAt = 0, lastBumpAt = 0;
+  static uint32_t lastSampleAt = 0, lastStrokeAt = 0, lastBumpAt = 0, strongSince = 0, lastLogAt = 0;
   static uint8_t strokes = 0;
   static float strokeDir[3] = {0, 0, 0};
   static float shakeStrength = 0;
   float dt = lastSampleAt ? min(uint32_t(100), now - lastSampleAt) / 1000.0f : .025f;
   lastSampleAt = now;
-  float excess = fmaxf(0.0f, jolt - SHAKE_NOISE_MS2);
+  // A wrist shake is partly rotation, so a fast spin counts as shaking too.
+  float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+  float excess = fmaxf(fmaxf(0.0f, jolt - SHAKE_NOISE_MS2), (spin - SHAKE_GYRO_RAD_S) * 2.5f);
   shakeStrength += (excess - shakeStrength) * (1.0f - expf(-dt / .35f));
   if (shakeStrength > SHAKE_NOISE_MS2 * .5f)
     creature.shake(shakeStrength / SHAKE_FULL_MS2);
+  if (LOG_SHAKE && shakeStrength > 1.0f && now - lastLogAt > 200) {
+    lastLogAt = now;
+    Serial.printf("shake: strength %.1f (dizzy at %.1f)  jolt %.1f m/s^2  spin %.1f rad/s  strokes %u\n",
+                  shakeStrength, SHAKE_DIZZY_STRENGTH, jolt, spin, strokes);
+  }
+  // Sustained hard shaking makes it dizzy even if the strokes are irregular.
+  strongSince = shakeStrength > SHAKE_DIZZY_STRENGTH ? (strongSince ? strongSince : now) : 0;
+  if (strongSince && now - strongSince >= SHAKE_DIZZY_HOLD_MS) {
+    strongSince = 0;
+    strokes = 0;
+    lastActivity = now;
+    sleepPreparing = false;
+    creature.impact(lin[0], lin[1]);
+    if (react(DIZZY, now, DIZZY_ANIM_MS) && LOG_SHAKE) Serial.println("shake: DIZZY (sustained)");
+    return;
+  }
 
   if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
   bool stroke = false;
@@ -400,11 +420,12 @@ void handleSurroundings(const float a[3], bool heldStill, uint32_t now) {
     sleepPreparing = false;
     creature.impact(lin[0] * .6f, lin[1] * .6f);
     if (strokes >= SHAKE_STROKES_FOR_DIZZY) {
-      // The full reaction: wobble, dizzy tumble, glare, calm down. Keep
+      // The full reaction: wobble, dizzy spiral eyes, glare, calm down. Keep
       // shaking and it starts spinning again.
       strokes = 0;
+      strongSince = 0;
       creature.impact(lin[0], lin[1]);
-      react(DIZZY, now, DIZZY_ANIM_MS);
+      if (react(DIZZY, now, DIZZY_ANIM_MS) && LOG_SHAKE) Serial.println("shake: DIZZY (strokes)");
       return;
     }
     if (strokes == 1 && creature.mood() != DIZZY && creature.mood() != ANGRY)
@@ -454,7 +475,7 @@ void handleMotion(uint32_t now) {
   float accelLength = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
   bool heldStill = fabsf(accelLength - 9.81f) < .85f &&
                    fabsf(g[0]) + fabsf(g[1]) + fabsf(g[2]) < .45f;
-  handleSurroundings(a, heldStill, now);
+  handleSurroundings(a, g, heldStill, now);
   bool changedTilt = fabsf(tiltX - anchorX) + fabsf(tiltY - anchorY)
                      > TILT_ACTIVITY_DELTA;
   if (heldStill && changedTilt) {
@@ -668,42 +689,38 @@ bool enterDeepSleep(bool lcdReady) {
   return true;
 }
 
-// After the IMU's coarse motion alarm woke the CPU (screen still dark): wake
-// the face only for a real shake (strong strokes that reverse direction) or a
-// back-and-forth twist. A walking jolt finds neither and goes back to sleep.
+// After the IMU's coarse motion alarm woke the CPU (screen still dark): turn
+// the face on for a shake -- a couple of strong jolts or fast flicks within a
+// few seconds -- or a back-and-forth twist. Gravity's direction is unknown
+// mid-shake, so a jolt is how far the total acceleration strays from 1 g.
+// A walking step is too gentle and goes back to sleep.
 bool confirmMotionWake() {
-  uint32_t began = millis(), lastStrokeAt = 0;
+  const uint32_t window = 2500;
+  uint32_t began = millis(), lastJoltAt = 0;
   TwistDetector detector;
-  float grav[3] = {0, 0, 0}, dir[3] = {0, 0, 0};
-  bool seeded = false;
-  uint8_t strokes = 0;
-  while (millis() - began < TWIST_WINDOW_MS + TWIST_START_TIMEOUT_MS) {
+  uint8_t jolts = 0;
+  bool armed = true; // a jolt counts on its rising edge only
+  while (millis() - began < window) {
     float a[3], g[3];
     readMotion(a, g);
     uint32_t now = millis();
     if (detector.feed(g, now)) return true;
-    if (!seeded) {
-      for (int i = 0; i < 3; ++i) grav[i] = a[i];
-      seeded = true;
+    float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    bool strong = fabsf(mag - 9.81f) > SHAKE_WAKE_MS2 || spin > SHAKE_GYRO_RAD_S * 1.5f;
+    if (strong && armed && now - lastJoltAt > 80) {
+      armed = false;
+      lastJoltAt = now;
+      ++jolts;
+      if (LOG_SHAKE) Serial.printf("wake jolt %u: %.1f m/s^2 off 1 g, spin %.1f rad/s\n",
+                                   jolts, fabsf(mag - 9.81f), spin);
+      if (jolts >= SHAKE_STROKES_TO_WAKE) return true;
+    } else if (!strong) {
+      armed = true;
     }
-    float lin[3], jolt2 = 0, dot = 0;
-    for (int i = 0; i < 3; ++i) {
-      grav[i] += (a[i] - grav[i]) * .05f;
-      lin[i] = a[i] - grav[i];
-      jolt2 += lin[i] * lin[i];
-      dot += lin[i] * dir[i];
-    }
-    if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0;
-    if (jolt2 > SHAKE_STROKE_MS2 * SHAKE_STROKE_MS2 && now - lastStrokeAt > 60 &&
-        (strokes == 0 || dot < 0)) {
-      for (int i = 0; i < 3; ++i) dir[i] = lin[i];
-      lastStrokeAt = now;
-      if (LOG_SHAKE) Serial.printf("wake stroke %u: %.1f m/s^2\n", strokes + 1, sqrtf(jolt2));
-      if (++strokes >= SHAKE_STROKES_TO_WAKE) return true;
-    }
-    if (!detector.active() && !strokes && now - began > TWIST_START_TIMEOUT_MS) return false;
-    delay(20);
+    delay(10);
   }
+  if (LOG_SHAKE) Serial.printf("wake check: %u strong jolt(s), not enough\n", jolts);
   return false;
 }
 
@@ -747,6 +764,8 @@ void setup() {
   bool touchConfirmed = touchWake && (!TOUCH_WAKE_DOUBLE_PRESS || confirmTwoPressWake());
   if (cause == ESP_SLEEP_WAKEUP_EXT1) exitMotionWake();
   imuReady = QMI8658_init() != 0;
+  Serial.println(imuReady ? "Motion sensor ready" :
+                 "Motion sensor NOT found: shake, tilt and shake-wake are disabled");
   if (touchWake && !touchConfirmed && !(source & (1ULL << IMU_WAKE_PIN))) {
     Serial.println("Single touch wake rejected; returning to sleep");
     if (enterDeepSleep(false)) return;

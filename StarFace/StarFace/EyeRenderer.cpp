@@ -20,6 +20,8 @@ static constexpr float LID_SHADOW = 8.0f;        // soft shade under the upper l
 static constexpr float LID_ROUNDING = 4.0f;      // px of rounding where a lid meets the eye outline
 static constexpr float CLOSED_WIDTH = 0.84f;     // a shut eye is this much narrower (lid corners meet)
 static constexpr float IRIS_DROP = 0.10f;        // irises sit a touch low, which reads as cute
+static constexpr float SPIRAL_TURNS = 2.6f;      // arms of the dizzy spiral across the iris radius
+static constexpr float SPIRAL_HALF_WIDTH = 0.21f; // spiral line half width, in turns
 // Reciprocals for the shading ramps (no divisions in the per-pixel loop).
 static constexpr float INV_RIM = 1.0f / (RIM_WIDTH + .5f);
 static constexpr float INV_SHADOW = 1.0f / (LID_SHADOW + .5f);
@@ -70,6 +72,17 @@ static inline float rsqrt2(float x) {
   return y * (1.5f - .5f * x * y * y);
 }
 static inline float fsqrt(float x) { return x > 1e-12f ? x * rsqrt2(x) : 0.0f; }
+// atan2 to ~0.005 rad, using rsqrt for the one reciprocal (no division).
+static inline float fastAtan2(float y, float x) {
+  float ax = fabsf(x), ay = fabsf(y);
+  float mx = ax > ay ? ax : ay, mn = ax > ay ? ay : ax;
+  if (mx < 1e-6f) return 0.0f;
+  float a = mn * rsqrt2(mx * mx), s = a * a;
+  float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a;
+  if (ay > ax) r = 1.57079637f - r;
+  if (x < 0) r = 3.14159274f - r;
+  return y < 0 ? -r : r;
+}
 // Inline helpers for the hot loop. Float division is a slow library call on
 // the ESP32 and fmaxf is not inlined, so the loop uses only these.
 static inline float fmax2(float a, float b) { return a > b ? a : b; }
@@ -200,7 +213,11 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float prx = irx * .50f, pry = iry * .53f, pupilUp = iry * .04f;
   const float iprx = 1.0f / prx, ipry = 1.0f / pry;
   // Highlights reflect a fixed light, so they lag the iris (parallax).
-  const float hlShow = smoothstep(8.0f, 18.0f, h);
+  const float spiral = clamp01(e.spiral);
+  const float spiralPx = irisR / SPIRAL_TURNS;     // px per spiral turn
+  const float spiralShift = e.spiralPhase * (1.0f / anim::TAU_F);
+  const Col spiralBg = mixc(c, white, .55f);
+  const float hlShow = smoothstep(8.0f, 18.0f, h) * (1.0f - .75f * spiral);
   const float hlSquash = 1.0f / fmaxf(.2f, blinkSquash);
   const float hlSquashInv = fmaxf(.2f, blinkSquash);
   const float h1x = iox * .86f - irisR * .32f, h1y = ioy * .86f - irisR * .38f, h1r = irisR * .29f;
@@ -326,6 +343,16 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
           float pxu = lx * iprx, pyu = (ly + pupilUp) * ipry;
           float dP = (fsqrt(pxu * pxu + pyu * pyu) - 1.0f) * prx;
           ic = mixc(ic, pupilC, clamp01(.5f - dP));
+          if (spiral > 0) {
+            // Dizzy: a light disc with a dark Archimedean spiral that spins.
+            float v = kI * SPIRAL_TURNS - fastAtan2(ly, lx) * (1.0f / anim::TAU_F) - spiralShift;
+            float fr = v - float(int(v));
+            if (fr < 0) fr += 1.0f;
+            float line = clamp01((SPIRAL_HALF_WIDTH - fabsf(fr - .5f)) * spiralPx + .5f);
+            Col sc = mixc(spiralBg, pupilC, line);
+            sc = mixc(sc, irisRing, ss01((kI - .86f) * (1.0f / .14f)) * .9f); // keep the dark rim
+            ic = mixc(ic, sc, spiral);
+          }
           // As the lids meet, the iris dissolves into the glowing rim colour
           // (never into a muddy grey).
           if (irisShow < 1.0f) ic = mixc(rim, ic, irisShow);

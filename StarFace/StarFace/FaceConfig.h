@@ -64,11 +64,15 @@ static constexpr bool DITHER = true;              // ordered dithering hides RGB
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
 // raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
 // print each stroke's strength over serial while you tune.
-static constexpr float SHAKE_STROKE_MS2 = 11.0f;  // one stroke of a shake (~1.1 g beyond gravity)
+static constexpr float SHAKE_STROKE_MS2 = 8.0f;   // one stroke of a shake (~0.8 g beyond gravity)
 static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 3; // back-and-forth strokes for the dizzy spell
-static constexpr uint32_t SHAKE_GAP_MS = 450;     // longest pause between strokes of one shake
+static constexpr uint32_t SHAKE_GAP_MS = 500;     // longest pause between strokes of one shake
 static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
-static constexpr float SHAKE_FULL_MS2 = 8.0f;     // average shake strength for a full-strength rattle
+static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for a full-strength rattle
+// Dizzy also triggers on sustained hard shaking, however the strokes line up:
+static constexpr float SHAKE_DIZZY_STRENGTH = 4.5f; // average shake strength (m/s^2 above noise)...
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 450; // ...kept up for this long
+static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster than this counts as shaking
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
 
@@ -81,7 +85,8 @@ static constexpr bool AUTO_DEEP_SLEEP = true;
 static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // power-save timeout when AUTO_DEEP_SLEEP
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
 static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
-static constexpr uint8_t SHAKE_STROKES_TO_WAKE = 3;    // back-and-forth strokes that wake it
+static constexpr uint8_t SHAKE_STROKES_TO_WAKE = 2;    // strong jolts after the motion alarm that wake it
+static constexpr float SHAKE_WAKE_MS2 = 6.0f;          // how strong each of those jolts must be
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
 

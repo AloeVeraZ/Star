@@ -729,7 +729,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
     case DIZZY: {
       float phase = dizzyPhase(t);
       if (t < 2.0f) {
-        both(0, 0, .96f, 1.02f, .84f, -.02f, 4, 0, .9f);
+        both(0, 0, .96f, 1.02f, .88f, -.02f, 3, 0, 1.12f); // big irises show the spiral
         L[P_OPEN] = .80f + .07f * sinf(phase * .5f);
         R[P_OPEN] = .93f + .06f * sinf(phase * .5f + 2);
         L[P_W] = .95f + .04f * cosf(phase);
@@ -1136,6 +1136,16 @@ void CreatureAnimator::compose() {
     g.glow = glowS.pos * glowBreath;
     g.heat = heat;
     g.blink = fmaxf(0.0f, c);
+    // Dizzy: spiral pupils spin up as the tumble starts, slow down with it and
+    // fade back into normal pupils during the recovery.
+    if (current == DIZZY) {
+      float t = age / 1000.0f;
+      g.spiral = smoothstep(.10f, .35f, t) * (1.0f - smoothstep(1.9f, 2.45f, t));
+      g.spiralPhase = dizzyPhase(t) * 1.6f + 9.0f * fminf(t, .4f) + i * 1.3f;
+    } else {
+      g.spiral = 0;
+      g.spiralPhase = 0;
+    }
     fitToCircle(g, baseW.pos, baseH.pos);
   }
 }

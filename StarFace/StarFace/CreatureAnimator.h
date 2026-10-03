@@ -3,11 +3,7 @@
 #include "AnimMath.h"
 #include "EyeRenderer.h"
 
-static constexpr float EYE_CENTER_X = 120;
-static constexpr float EYE_CENTER_Y = 116;
-static constexpr float EYE_SPACING = 90;          // center-to-center, px
-static constexpr float EYE_GAZE_SHIFT_X = 6;      // whole-eye travel at full gaze, px
-static constexpr float EYE_GAZE_SHIFT_Y = 4;
+// Layout, motion limits and feel are tuned in FaceConfig.h.
 static constexpr uint32_t DIZZY_ANIM_MS = 2850;
 static constexpr uint32_t ANGRY_ANIM_MS = 1900;
 static constexpr uint32_t BATTERY_SHOW_MS = 2600;
@@ -20,9 +16,12 @@ enum Mood : uint8_t {
 };
 
 // Layered, spring-driven eye animation:
-//   expression pose (springs) + gaze (springs) + saccades + blink
-//   + micro motion (noise) + body physics (springs, inertia) + effects
+//   expression pose (springs) + gaze (fast pupil springs, slower eye-travel
+//   springs) + saccades + blink + micro motion (noise) + body physics
+//   (springs, inertia) + effects (dizzy, shiver) + glow/colour mood
 // Moods only change targets; the springs blend every state into every other.
+// The final pose is squashed/stretched by velocity, given a slight perspective
+// turn, and softly fitted inside the round screen's safe radius.
 class CreatureAnimator {
  public:
   typedef anim::Spring Spring;
@@ -65,7 +64,7 @@ class CreatureAnimator {
 
  private:
   enum Channel : uint8_t {
-    P_DX, P_DY, P_W, P_H, P_OPEN, P_ANGLE, P_DROP, P_LOWER, P_PUPIL, P_COUNT
+    P_DX, P_DY, P_W, P_H, P_OPEN, P_ANGLE, P_DROP, P_LOWER, P_PUPIL, P_BEND, P_COUNT
   };
   enum BlinkType : uint8_t {
     B_NORMAL, B_FAST, B_LONG, B_HALF, B_SLEEPY, B_SQUEEZE, B_UNEVEN
@@ -116,8 +115,9 @@ class CreatureAnimator {
   Spring expr[2][P_COUNT];
   Spring baseW, baseH, baseIris;
 
-  // Gaze layer
+  // Gaze layer: pupils lead (gaze), the eye bodies follow a beat later (travel)
   Spring gazeX[2], gazeY[2];
+  Spring travelX[2], travelY[2];
   Spring sacX, sacY;
   float idleGX = 0, idleGY = 0, savedGX = 0, savedGY = 0;
   uint32_t nextGazeAt = 0, nextSaccadeAt = 0;
@@ -150,6 +150,11 @@ class CreatureAnimator {
   int touchX = 120, touchY = 120;
   int swipeX = 0, swipeY = 0;
 
+  // Glow and colour mood
+  Spring glowS;
+  float heat = 0;
+  float grumpy = 0;                // lingering annoyance after anger, 1 -> 0
+
   // Backlight 0..1
   float blLevel = 0;
 
@@ -167,7 +172,9 @@ class CreatureAnimator {
   void updatePhysics(float dt, uint32_t now);
   void updateShakeReaction(float dt);
   void updateBacklight(float dt);
+  void updateMoodColour(float dt);
   void compose();
+  void fitToCircle(EyeGeom &g, float baseW, float baseH);
 
   bool blinkAllowed() const;
   void scheduleBlink(uint32_t now);

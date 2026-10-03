@@ -9,12 +9,14 @@
 #include "LCD_1in28.h"
 #include "QMI8658.h"
 #include "CST816S.h"
+#include "FaceConfig.h"
 #include "EyeRenderer.h"
 #include "CreatureAnimator.h"
 
-// Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240).
+// Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round).
 // Hardware, input and power live here; all eye animation is in CreatureAnimator,
-// all drawing in EyeRenderer.
+// all drawing in EyeRenderer. Eye size, layout, colours, animation feel, shake
+// sensitivity and sleep timing are tuned in FaceConfig.h.
 uint16_t *BlackImage = nullptr; // Required by Waveshare's LCD_1in28.cpp.
 CST816S touch(6, 7, 13, 5);
 EyeRenderer renderer;
@@ -26,13 +28,7 @@ static constexpr uint32_t NAP_FRAME_US = 33333;  // 30 FPS is plenty while the e
 static constexpr float MAX_FRAME_DT = .05f;      // a stall never turns into an animation jump
 static constexpr bool LOG_FPS = false;           // print frames per second over serial
 
-// Power. By default the face never goes black on its own: it naps with a dim,
-// breathing glow and wakes on any touch or movement.
-static constexpr bool AUTO_DEEP_SLEEP = false;   // true: switch fully off after IDLE_SLEEP_MS
-static constexpr uint32_t IDLE_SLEEP_MS = 30000; // deep-sleep timeout when AUTO_DEEP_SLEEP
-static constexpr uint32_t IDLE_NAP_MS = 45000;   // stays on: dozes off after this long alone
-static constexpr uint8_t BACKLIGHT_PERCENT = 62;
-static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
+// Power (sleep timeouts and backlight levels are in FaceConfig.h).
 static constexpr int LOW_BATTERY_PERCENT = 3;    // a nap at or below this becomes deep sleep
 static constexpr uint32_t BATTERY_CHECK_MS = 60000;
 
@@ -46,13 +42,6 @@ static constexpr uint8_t TWIST_REVERSALS_TO_WAKE = 3;
 static constexpr uint8_t WOM_THRESHOLD_MG = 90; // coarse low-power alert; gyro verifies the twist
 static constexpr float TILT_ACTIVITY_DELTA = .55f; // held orientation change, not a walking jostle
 static constexpr uint32_t TILT_ACTIVITY_HOLD_MS = 300;
-// Surroundings, from gravity-free acceleration in m/s^2.
-static constexpr float SHAKE_PEAK_MS2 = 16.0f;   // one stroke of a vigorous shake
-static constexpr uint8_t SHAKE_PEAKS_FOR_DIZZY = 4;
-static constexpr uint32_t SHAKE_WINDOW_MS = 1300;
-static constexpr float BUMP_MS2 = 9.0f;          // a knock or bump: recoil and a startled look
-static constexpr float PICKUP_MS2 = 2.2f;        // picked up / moved: ends a nap, perks up
-static constexpr uint8_t DEFAULT_EYE_COLOR = 0; // 0 lilac, 1 pink, 2 cyan, 3 blue, 4 red, 5 white, 6 yellow
 static constexpr int IMU_WAKE_PIN = 3;    // QMI8658 INT2, active low in WoM
 static constexpr int TOUCH_WAKE_PIN = 5;  // CST816S IRQ, active-low touch pulse
 
@@ -366,10 +355,14 @@ void handleSurroundings(const float a[3], bool heldStill, uint32_t now) {
   uint32_t stillFor = stillSince ? now - stillSince : 0;
   stillSince = heldStill ? (stillSince ? stillSince : now) : 0;
 
-  // Picked up or moved while napping: wake up.
+  // Shaken while napping: the screen brightens with the eyes still shut, they
+  // pop open, tumble dizzily, glare, then calm down. A gentler pick-up just
+  // wakes it.
   if (sleepPreparing && creature.sleepFinished(now) && jolt > PICKUP_MS2) {
-    startWakeAnimation(now, false);
-    Serial.println("Nap ended by motion");
+    bool shaken = jolt > SHAKE_PEAK_MS2;
+    if (shaken) creature.impact(lin[0], lin[1]);
+    startWakeAnimation(now, shaken);
+    Serial.println(shaken ? "Nap ended by a shake" : "Nap ended by motion");
     return;
   }
 
@@ -736,7 +729,7 @@ void setup() {
   palette = prefs.getUChar("colorV2", DEFAULT_EYE_COLOR) % EYE_PALETTE_COUNT;
   Serial.printf("Eye look=%u palette=%u personality=%u\n", eyeLook, palette, personality);
   lastActivity = millis();
-  renderer.begin(BlackImage);
+  renderer.begin(BlackImage, LCD_1IN28_DisplayWindows);
   creature.begin(&renderer, eyeLook, palette, personality,
                  uint32_t(mac ^ (mac >> 32)), lastActivity);
   readBattery();

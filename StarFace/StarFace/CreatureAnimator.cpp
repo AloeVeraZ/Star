@@ -5,10 +5,12 @@ using namespace anim;
 
 namespace {
 
-// The calm rest pose: dx, dy, width, height, open, lid angle, lid drop, lower lid, pupil.
-const float IDLE_POSE[] = {0, 0, 1, 1, 1.0f, .045f, 6, 0, 1};
+// The calm rest pose: dx, dy, width, height, open, lid angle, lid drop, lower lid,
+// pupil, bend. Pixel channels are authored for a 48 px half-height eye and are
+// scaled by EYE_PX_SCALE in compose(), so expressions grow with the eyes.
+const float IDLE_POSE[] = {0, 0, 1, 1, 1.0f, .045f, 6, 0, 1, 0};
 // Some channels react a little faster than others (blinky lids, quick pupils).
-const float CHANNEL_RATE[] = {1, 1, 1.1f, 1.1f, 1.25f, .9f, .9f, 1, 1.2f};
+const float CHANNEL_RATE[] = {1, 1, 1.1f, 1.1f, 1.25f, .9f, .9f, 1, 1.2f, .9f};
 
 // ---- Wake-up choreography. Each key sets new targets; springs do the motion. ----
 struct WakeKey {
@@ -96,9 +98,9 @@ float dizzyPhase(float t) {
 }
 
 void setPose(float *p, float dx, float dy, float w, float h, float open,
-             float angle, float drop, float lower, float pupil) {
+             float angle, float drop, float lower, float pupil, float bend = 0) {
   p[0] = dx; p[1] = dy; p[2] = w; p[3] = h; p[4] = open;
-  p[5] = angle; p[6] = drop; p[7] = lower; p[8] = pupil;
+  p[5] = angle; p[6] = drop; p[7] = lower; p[8] = pupil; p[9] = bend;
 }
 
 } // namespace
@@ -122,6 +124,7 @@ void CreatureAnimator::begin(EyeRenderer *r, uint8_t look, uint8_t palette,
     expr[i][P_OPEN].snap(.02f);
   }
   applyLook(look, palette, true);
+  glowS.snap(1);
   blLevel = 0;
   current = previous = IDLE;
   moodStart = moodUntil = now;
@@ -261,6 +264,9 @@ void CreatureAnimator::impact(float ax, float ay) {
 void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, float strength) {
   previous = current;
   current = m;
+  // Anger never just switches off: the lids stay a little heavy and the colour
+  // a little warm, cooling over ANGER_COOLDOWN_S.
+  if (previous == ANGRY && m != ANGRY) grumpy = 1;
   moodStart = now;
   moodUntil = now + durationMs;
   age = 0;
@@ -296,6 +302,9 @@ void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, floa
     case ANXIOUS:
       nextDartAt = now;
       break;
+    case SURPRISED:
+      glowS.kick(2.4f); // the glow flares as the eyes pop open
+      break;
     default:
       break;
   }
@@ -310,13 +319,17 @@ void CreatureAnimator::update(float dt, uint32_t now) {
   bool deep = current == SLEEPY && age > SLEEP_CLOSE_AT;
   breathPhase = fmodf(breathPhase + TAU_F * dt / (deep ? 4.8f : 3.7f), TAU_F);
   breathAmp = approach(breathAmp, deep ? 1.5f : .75f, 1.0f, dt);
+  // ANIMATION_SPEED scales spring time (same overshoot, faster or slower
+  // settle); scripted timelines and blinks keep real time.
+  const float sdt = dt * ANIMATION_SPEED;
   updateMoodTimeline(now);
-  updateIdle(dt, now);
+  updateIdle(sdt, now);
   updateBlink(now);
-  updateExpression(dt, now);
-  updateGaze(dt, now);
-  updatePhysics(dt, now);
-  updateShakeReaction(dt);
+  updateExpression(sdt, now);
+  updateGaze(sdt, now);
+  updatePhysics(sdt, now);
+  updateShakeReaction(sdt);
+  updateMoodColour(dt);
   updateBacklight(dt);
   compose();
   prevAge = age;
@@ -451,8 +464,9 @@ bool CreatureAnimator::blinkAllowed() const {
 }
 
 void CreatureAnimator::scheduleBlink(uint32_t now) {
-  // 2-7 s, weighted toward the shorter end.
-  float interval = 2000.0f + 5000.0f * powf(frand(), 1.5f);
+  // Weighted toward the shorter end of BLINK_MIN_MS..BLINK_MAX_MS.
+  float interval = BLINK_MIN_MS + float(BLINK_MAX_MS - BLINK_MIN_MS) * powf(frand(), 1.5f);
+  if (grumpy > .3f) interval *= 1.2f; // a sulky stare
   switch (current) {
     case SAD: interval *= 1.35f; break;
     case ANGRY: interval *= 1.25f; break;
@@ -531,11 +545,11 @@ void CreatureAnimator::updateBlink(uint32_t now) {
   if (current == HAPPY || current == PETTED) type = r < .45f ? B_SQUEEZE : B_NORMAL;
   else if (current == ANXIOUS) type = r < .7f ? B_FAST : B_NORMAL;
   else if (current == SAD || drowsy > .6f) type = r < .45f ? B_SLEEPY : r < .6f ? B_HALF : B_NORMAL;
-  else if (r < .62f) type = B_NORMAL;
-  else if (r < .70f) pair = true;
-  else if (r < .80f) type = B_FAST;
-  else if (r < .86f) type = B_LONG;
-  else if (r < .95f) type = B_HALF;
+  else if (chance(DOUBLE_BLINK_CHANCE)) pair = true;
+  else if (r < .64f) type = B_NORMAL;
+  else if (r < .76f) type = B_FAST;
+  else if (r < .84f) type = B_LONG;
+  else if (r < .94f) type = B_HALF;
   else type = B_UNEVEN;
   startBlink(now, type);
   if (pair) {
@@ -573,7 +587,7 @@ void CreatureAnimator::wakeTargets(float *L, float *R, float &freq, float &zeta,
 
 void CreatureAnimator::sleepTargets(float *L, float *R, float &freq, float &zeta, uint32_t now) {
   float droop = smoothstep(0.0f, float(SLEEP_BLINK_AT), float(age));
-  float open = age < SLEEP_BLINK_AT ? lerp(1.0f, .70f, droop)   // lids droop
+  float open = age < SLEEP_BLINK_AT ? mix(1.0f, .70f, droop)   // lids droop
              : age < SLEEP_DROOP_AT ? .62f                       // reopen only partway
              : age < SLEEP_CLOSE_AT ? .40f                       // heavier
              : .02f;                                             // a last long blink that stays shut
@@ -581,6 +595,8 @@ void CreatureAnimator::sleepTargets(float *L, float *R, float &freq, float &zeta
   L[P_DROP] = R[P_DROP] = 6 + 6 * droop;
   L[P_ANGLE] = R[P_ANGLE] = .03f;
   L[P_DY] = R[P_DY] = 2.0f * droop;
+  // Shut eyes relax into soft U-shaped arcs.
+  L[P_BEND] = R[P_BEND] = age < SLEEP_CLOSE_AT ? -1.2f * droop : -4.5f;
   if (crossed(SLEEP_BLINK_AT)) startBlink(now, B_SLEEPY);
   freq = age < SLEEP_CLOSE_AT ? 1.1f : .85f;
   zeta = 1.0f;
@@ -617,9 +633,9 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
   float t = age / 1000.0f;
   bool scripted = false; // scripted sequences are not intensity-scaled
   auto both = [&](float dx, float dy, float w, float h, float open, float angle,
-                  float drop, float lower, float pupil) {
-    setPose(L, dx, dy, w, h, open, angle, drop, lower, pupil);
-    setPose(R, dx, dy, w, h, open, angle, drop, lower, pupil);
+                  float drop, float lower, float pupil, float bend = 0) {
+    setPose(L, dx, dy, w, h, open, angle, drop, lower, pupil, bend);
+    setPose(R, dx, dy, w, h, open, angle, drop, lower, pupil, bend);
   };
 
   switch (current) {
@@ -627,7 +643,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       // Transition out: how gently we return depends on where we came from.
       float from = previous == ANGRY ? 1.2f : previous == SAD ? 1.5f :
                    previous == DIZZY ? 2.0f : previous == SURPRISED ? 2.2f : 3.2f;
-      f = lerp(from, 3.2f, smoothstep(0.0f, 1800.0f, float(age)));
+      f = mix(from, 3.2f, smoothstep(0.0f, 1800.0f, float(age)));
       z = .8f;
       float *a = (seed & 2) ? L : R, *b = (seed & 2) ? R : L;
       if (quirk == 1) {        // squint
@@ -639,6 +655,14 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       }
       // Near the sleep timeout the lids start to get heavy.
       for (float *p : {L, R}) { p[P_OPEN] -= .14f * drowsy; p[P_DROP] += 3 * drowsy; }
+      // Still grumpy after an angry spell: lids low and angled, calming down.
+      if (grumpy > .01f) {
+        float gr = grumpy * EXPRESSION_INTENSITY;
+        for (float *p : {L, R}) {
+          p[P_ANGLE] += .20f * gr; p[P_DROP] += 8 * gr; p[P_OPEN] -= .12f * gr; p[P_DX] += 1.5f * gr;
+        }
+        f = mix(f, 2.0f, grumpy);
+      }
       break;
     }
     case HAPPY:
@@ -648,7 +672,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       } else {
         float fade = 1.0f - .5f * smoothstep(0.0f, float(moodUntil - moodStart), float(age));
         float bounce = -1.6f * fmaxf(0.0f, sinf(TAU_F * 1.9f * t)) * fade;
-        both(0, -6 + bounce, 1.04f, .98f, .80f, -.06f, 7, 15, 1);
+        both(0, -6 + bounce, 1.04f, .98f, .80f, -.06f, 7, 15, 1, 3.5f); // ^ ^ arcs
         R[P_LOWER] += 1.5f;
         f = 5.5f; z = .42f;
       }
@@ -658,7 +682,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       }
       break;
     case SAD:
-      both(2, 8 + 2.5f * smoothstep(0.0f, 3000.0f, float(age)), .98f, .96f, .60f, -.30f, 13, 0, 1.04f);
+      both(2, 8 + 2.5f * smoothstep(0.0f, 3000.0f, float(age)), .98f, .96f, .60f, -.30f, 13, 0, 1.04f, -1.0f);
       R[P_OPEN] = .57f;
       f = 1.5f; z = 1.0f;
       break;
@@ -680,9 +704,10 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
         f = age < 650 ? 7.5f : 4.0f;
         z = age < 650 ? .42f : .6f;
       }
-      if (crossed(110)) { // impact: snap inward, lids slam down
+      if (crossed(110)) { // impact: snap inward, lids slam down, the glow flares
         for (auto &e : expr) { e[P_DX].kick(45); e[P_OPEN].kick(-2.5f); e[P_DROP].kick(30); }
         bodyY.kick(30);
+        glowS.kick(1.8f);
       }
       break;
     case SURPRISED:
@@ -724,7 +749,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       f = 4.5f; z = .38f;
       break;
     case PETTED:
-      both(0, -2, 1.05f, .97f, .56f, -.05f, 9, 8, 1.05f);
+      both(0, -2, 1.05f, .97f, .56f, -.05f, 9, 8, 1.05f, 2.0f);
       R[P_OPEN] = .60f;
       f = 2.2f; z = .9f;
       break;
@@ -788,9 +813,10 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
 
   // Every reaction lands with slightly different strength.
   if (!scripted && current != IDLE) {
+    const float amount = intensity * EXPRESSION_INTENSITY;
     for (int c = 0; c < P_COUNT; ++c) {
-      L[c] = IDLE_POSE[c] + (L[c] - IDLE_POSE[c]) * intensity;
-      R[c] = IDLE_POSE[c] + (R[c] - IDLE_POSE[c]) * intensity;
+      L[c] = IDLE_POSE[c] + (L[c] - IDLE_POSE[c]) * amount;
+      R[c] = IDLE_POSE[c] + (R[c] - IDLE_POSE[c]) * amount;
     }
   }
   for (int i = 0; i < 2; ++i) {
@@ -858,8 +884,14 @@ void CreatureAnimator::updateGaze(float dt, uint32_t now) {
     float fi = i ? f * .88f : f; // the second eye follows a fraction later
     gazeX[i].target = tx;
     gazeY[i].target = ty;
-    gazeX[i].update(dt, fi, z);
-    gazeY[i].update(dt, fi, z);
+    gazeX[i].update(dt, fi * 1.15f, z);
+    gazeY[i].update(dt, fi * 1.15f, z);
+    // The whole eye follows the pupil a beat later and without overshoot,
+    // like a head turning after the eyes: the motion reads as two masses.
+    travelX[i].target = tx;
+    travelY[i].target = ty;
+    travelX[i].update(dt, fi * .5f, .92f);
+    travelY[i].update(dt, fi * .5f, .92f);
   }
 }
 
@@ -871,7 +903,8 @@ void CreatureAnimator::updatePhysics(float dt, uint32_t now) {
   float t = age / 1000.0f;
   switch (current) {
     case FOLLOWING:
-      if (pointerHeld) { tx = pointerX * 5; ty = pointerY * 4; }
+      // Gaze travel already moves the eyes; the body only leans a little more.
+      if (pointerHeld) { tx = pointerX * 2.5f; ty = pointerY * 2.0f; }
       break;
     case SWIPING:
       if (age < 260) { // pulled with the finger, then released into a springy rebound
@@ -922,15 +955,16 @@ void CreatureAnimator::updateShakeReaction(float dt) {
     // Stage 3: each eye circles slightly out of phase, the circles shrinking.
     float env = smoothstep(.35f, .75f, t) * (1.0f - smoothstep(1.85f, 2.3f, t));
     float u = clamp01((t - .35f) / 1.95f), phase = dizzyPhase(t);
-    float radius = lerp(10, 3, u) * env, pupilRadius = lerp(.75f, .3f, u) * env;
+    float radius = mix(10, 3, u) * env, pupilRadius = mix(.75f, .3f, u) * env;
     ex[0] += cosf(phase) * radius;
     ey[0] += sinf(phase) * radius * .8f;
     ex[1] += cosf(phase + .9f) * radius * .85f;
     ey[1] += sinf(phase + .9f) * radius * .68f;
-    px[0] += cosf(phase + 1.6f) * pupilRadius;
-    py[0] += sinf(phase + 1.6f) * pupilRadius;
-    px[1] += cosf(phase + 2.5f) * pupilRadius;
-    py[1] += sinf(phase + 2.5f) * pupilRadius;
+    // Pupils spin against the eyes and a touch faster: the classic woozy look.
+    px[0] += cosf(1.6f - phase * 1.3f) * pupilRadius;
+    py[0] += sinf(1.6f - phase * 1.3f) * pupilRadius * .85f;
+    px[1] += cosf(2.5f - phase * 1.3f) * pupilRadius;
+    py[1] += sinf(2.5f - phase * 1.3f) * pupilRadius * .85f;
   } else if (current == SHIVER) {
     for (int i = 0; i < 2; ++i) {
       ex[i] = 2.4f * sinf(TAU_F * 11 * clock + i * .6f) * (.7f + .3f * noise1(clock * 3, seed + i));
@@ -963,38 +997,127 @@ void CreatureAnimator::updateBacklight(float dt) {
     if (napping()) // the glow breathes slowly with the creature instead of going dark
       blLevel = approach(blLevel, napLevel * (.86f + .14f * sinf(breathPhase)), 3.0f, dt);
     else
-      blLevel = fminf(blLevel, lerp(1.0f, napLevel, u));
+      blLevel = fminf(blLevel, mix(1.0f, napLevel, u));
   } else {
     blLevel = fminf(1.0f, blLevel + dt * 5.0f);
+  }
+}
+
+// ---- Glow and colour mood: anger warms the eyes, surprise flares them ----
+
+void CreatureAnimator::updateMoodColour(float dt) {
+  grumpy = approach(grumpy, 0.0f, 3.0f / ANGER_COOLDOWN_S, dt);
+  float hot = grumpy * .35f, bright = 1.0f;
+  switch (current) {
+    case ANGRY: hot = age < 110 ? .25f : .9f; bright = 1.12f; break;
+    case DIZZY: hot = .35f * smoothstep(1.7f, 2.7f, age / 1000.0f); bright = .94f; break;
+    case SURPRISED: bright = 1.12f; break;
+    case HAPPY: case PETTED: bright = 1.07f; break;
+    case SAD: bright = .80f; break;
+    case SHY: bright = .90f; break;
+    case SLEEPY: bright = age > SLEEP_CLOSE_AT ? .80f : .92f; break;
+    default: break;
+  }
+  hot = fmaxf(hot, grumpy * .35f) * fminf(1.0f, EXPRESSION_INTENSITY);
+  heat = approach(heat, hot, hot > heat ? 7.0f : 1.1f, dt); // flares fast, cools slowly
+  glowS.target = bright;
+  glowS.update(dt, 2.2f, .5f);
+}
+
+// ---- Round-screen fit: keep each eye (and the bright part of its glow) inside
+// the safe circle. A soft knee starts easing before the limit; the excess is
+// absorbed by nudging the eye toward the centre and by a small shrink, so it
+// looks like the eye presses against the glass, never cropped. ----
+
+void CreatureAnimator::fitToCircle(EyeGeom &g, float baseW, float baseH) {
+  // Expressions may grow the eyes, but never past MAX_EXPRESSION_EXPANSION.
+  g.rx = fminf(g.rx, baseW * MAX_EXPRESSION_EXPANSION);
+  g.ry = fminf(g.ry, baseH * MAX_EXPRESSION_EXPANSION);
+  if (g.open > 1.0f) g.open = fminf(g.open, baseH * MAX_EXPRESSION_EXPANSION / g.ry);
+
+  static constexpr int N = 24;
+  static float cs[N], sn[N];
+  static bool ready = false;
+  if (!ready) {
+    for (int i = 0; i < N; ++i) { cs[i] = cosf(TAU_F * i / N); sn[i] = sinf(TAU_F * i / N); }
+    ready = true;
+  }
+  float cy, h;
+  eyeDrawnExtent(g, cy, h);
+  const float ax = g.rx + SAFE_GLOW_MARGIN, ay = h + fabsf(g.bend) + SAFE_GLOW_MARGIN;
+  const float ox = g.x - SCREEN_CX, oy = cy - SCREEN_CY;
+  float best = 0;
+  int far = 0;
+  for (int i = 0; i < N; ++i) {
+    float px = ox + ax * cs[i], py = oy + ay * sn[i];
+    float d2 = px * px + py * py;
+    if (d2 > best) { best = d2; far = i; }
+  }
+  const float knee = SAFE_RADIUS - SAFE_SOFTNESS;
+  const float dmax = sqrtf(best);
+  if (dmax <= knee) return;
+  const float allowed = knee + SAFE_SOFTNESS * tanhf((dmax - knee) / SAFE_SOFTNESS);
+  const float excess = dmax - allowed;
+  const float ux = (ox + ax * cs[far]) / dmax, uy = (oy + ay * sn[far]) / dmax;
+  // Overflow at the sides is mostly absorbed by shrinking (moving inward
+  // would crowd the pair together); at the top/bottom by moving.
+  const float move = excess * mix(.3f, .8f, uy * uy);
+  g.x -= ux * move;
+  g.y -= uy * move;
+  const float reach = ax * cs[far] * ux + ay * sn[far] * uy; // far point's radial reach from the eye centre
+  if (reach > 1.0f) {
+    float s = clampf(1.0f - (excess - move) / reach, .88f, 1.0f);
+    g.rx *= s; g.ry *= s; g.iris *= s;
   }
 }
 
 // ---- Combine every layer into the final eye geometry ----
 
 void CreatureAnimator::compose() {
-  float breath = breathAmp * sinf(breathPhase) + .25f * noise1(clock * .6f, seed + 3);
+  const float S = EYE_PX_SCALE;
+  const float breath = (breathAmp * sinf(breathPhase) + .25f * noise1(clock * .6f, seed + 3)) * S;
+  const float glowBreath = 1.0f + (current == SLEEPY ? .10f : .035f) * sinf(breathPhase);
   for (int i = 0; i < 2; ++i) {
     const float side = i == 0 ? -1.0f : 1.0f; // left eye sits left of center
     const float inward = -side;
+    const float c = clampf(closure[i], -.1f, 1.0f);
+    // Pupils: the fast layer (gaze + saccades + effects + a whisper of drift).
     float gx = gazeX[i].pos + sacX.pos + pfxX[i].pos + .02f * noise1(clock * .7f, seed + 41 + i);
     float gy = gazeY[i].pos + sacY.pos + pfxY[i].pos + .02f * noise1(clock * .7f, seed + 51 + i);
+    // Eye bodies: the slow layer, following the pupils a beat later.
+    float tx = travelX[i].pos + sacX.pos * .25f, ty = travelY[i].pos + sacY.pos * .25f;
     float microW = .008f * noise1(clock * .33f, seed + 21 + i);
     float microH = .012f * noise1(clock * .4f, seed + 11 + i);
     float microLid = .45f * noise1(clock * .5f, seed + 31 + i);
     EyeGeom &g = geom[i];
-    g.x = EYE_CENTER_X + side * EYE_SPACING * .5f + inward * expr[i][P_DX].pos + bodyX.pos
-          + fxX[i].pos + (gazeX[i].pos + sacX.pos * .3f) * EYE_GAZE_SHIFT_X;
-    g.y = EYE_CENTER_Y + expr[i][P_DY].pos + bodyY.pos + fxY[i].pos
-          + (gazeY[i].pos + sacY.pos * .3f) * EYE_GAZE_SHIFT_Y + breath + side * leanSm;
-    g.rx = baseW.pos * expr[i][P_W].pos * (1.0f + microW);
-    g.ry = baseH.pos * expr[i][P_H].pos * (1.0f + microH);
+    g.x = EYE_CENTER_X + side * EYE_SPACING * .5f + tx * MAX_GAZE_SHIFT_X
+          + (inward * expr[i][P_DX].pos + bodyX.pos + fxX[i].pos) * S;
+    // A blink tugs the eye down a hair, as if the lid pulls on it.
+    g.y = EYE_CENTER_Y + ty * MAX_GAZE_SHIFT_Y + breath
+          + (expr[i][P_DY].pos + bodyY.pos + fxY[i].pos + side * leanSm + 1.4f * fmaxf(0.0f, c)) * S;
+    // Depth: the eye on the side being looked toward sits a little farther away.
+    float persp = 1.0f - EYE_PERSPECTIVE * clampf(travelX[i].pos, -1.0f, 1.0f) * side;
+    // Squash & stretch along fast motion, roughly keeping the eye's area.
+    float vx = travelX[i].vel * MAX_GAZE_SHIFT_X + bodyX.vel * S;
+    float vy = travelY[i].vel * MAX_GAZE_SHIFT_Y + bodyY.vel * S;
+    float sx = clampf(fabsf(vx) * (SQUASH_STRETCH / 1600.0f), 0.0f, .08f);
+    float sy = clampf(fabsf(vy) * (SQUASH_STRETCH / 1600.0f), 0.0f, .08f);
+    g.rx = baseW.pos * expr[i][P_W].pos * (1.0f + microW) * persp * (1.0f + sx - .5f * sy)
+           * (1.0f + .06f * fmaxf(0.0f, c)); // lids pressing shut spread the eye a little
+    g.ry = baseH.pos * expr[i][P_H].pos * (1.0f + microH) * persp * (1.0f + sy - .5f * sx);
     float open = expr[i][P_OPEN].pos * (1.0f + asymOpen[i]);
-    g.open = clampf(open * (1.0f - .985f * closure[i]), .02f, 1.3f);
+    g.open = clampf(open * (1.0f - .985f * c), .02f, 1.3f);
     g.pupilX = gx;
     g.pupilY = gy;
-    g.iris = baseIris.pos * clampf(expr[i][P_PUPIL].pos, .45f, 1.4f);
+    g.iris = baseIris.pos * clampf(expr[i][P_PUPIL].pos, .45f, 1.4f) * persp;
     g.lidAngle = expr[i][P_ANGLE].pos;
-    g.lidDrop = expr[i][P_DROP].pos + asymDrop[i] + microLid;
-    g.lowerLid = expr[i][P_LOWER].pos;
+    g.lidDrop = (expr[i][P_DROP].pos + asymDrop[i] + microLid) * S;
+    g.lowerLid = expr[i][P_LOWER].pos * S;
+    // A closing lid curves the shut eye into a gentle smile-line arc.
+    g.bend = (expr[i][P_BEND].pos - 2.0f * fmaxf(0.0f, c)) * S;
+    g.glow = glowS.pos * glowBreath;
+    g.heat = heat;
+    g.blink = fmaxf(0.0f, c);
+    fitToCircle(g, baseW.pos, baseH.pos);
   }
 }

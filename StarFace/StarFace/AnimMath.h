@@ -11,7 +11,8 @@ constexpr float TAU_F = 6.28318531f;
 
 inline float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
-inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
+// Named mix() because C++20 adds std::lerp, which made unqualified calls ambiguous.
+inline float mix(float a, float b, float t) { return a + (b - a) * t; }
 
 // ---- Easing curves: t in [0, 1] -> [0, 1] ----
 inline float easeIn(float t) { t = clamp01(t); return t * t * t; }
@@ -73,7 +74,7 @@ inline float noise1(float x, uint32_t seed = 0) {
   int32_t i = int32_t(fl);
   float f = x - fl;
   float u = f * f * (3.0f - 2.0f * f);
-  return lerp(hashNoise(i, seed), hashNoise(i + 1, seed), u);
+  return mix(hashNoise(i, seed), hashNoise(i + 1, seed), u);
 }
 inline float frand() { return (esp_random() >> 8) * (1.0f / 16777216.0f); }
 inline float frand(float lo, float hi) { return lo + (hi - lo) * frand(); }

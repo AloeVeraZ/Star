@@ -19,8 +19,8 @@ frames = sys.argv[1] if len(sys.argv) > 1 else "frames"
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.normpath(os.path.join(here, "..", ".."))
 
-names = ["idle", "style_dot", "style_blip", "style_cat", "happy", "surprised",
-         "angry", "dizzy", "sad", "sleeping", "style_cat_surprised", "look_right"]
+names = ["idle", "happy", "sad", "angry", "surprised", "expr_sleepy",
+         "expr_squint", "expr_curious", "confused", "loved", "dizzy", "sleeping"]
 subprocess.run([sys.executable, os.path.join(here, "sheet.py"),
                 os.path.join(root, "face-expressions.png"), "--scale", "1", "--cols", "6"]
                + [os.path.join(frames, n + ".ppm") for n in names], check=True)

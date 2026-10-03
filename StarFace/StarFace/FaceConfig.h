@@ -3,72 +3,57 @@
 
 // ============================================================================
 //  Star Face tuning: everything you are likely to want to change is here.
-//  Sizes are screen pixels on the 240 x 240 round GC9A01A panel. Times are ms.
+//  Eye sizes are fractions of the screen; times are ms; motion is m/s^2.
 // ============================================================================
 
-// ---- Round screen ------------------------------------------------------------
-// The panel is a 240 px circle; the corners of the framebuffer are never seen.
-// Eye geometry (body plus the bright part of its glow) is softly kept inside
-// SAFE_RADIUS, so gaze, wide eyes and impacts never clip against the bezel.
-static constexpr float SCREEN_CX = 119.5f;        // centre of the visible circle
-static constexpr float SCREEN_CY = 119.5f;
-static constexpr float SCREEN_RADIUS = 120.0f;    // visible radius
-static constexpr float SAFE_RADIUS = 112.0f;      // nothing important crosses this
-static constexpr float SAFE_SOFTNESS = 10.0f;     // eyes ease in over this many px before the limit
-static constexpr float SAFE_GLOW_MARGIN = 4.0f;   // how much glow counts as "part of the eye"
+// ============================================================================
+//  EYES: the parameters you are most likely to want to change.
+// ============================================================================
 
-// ---- Eye layout --------------------------------------------------------------
-// Two tall eyes side by side fill a circle best: their outer edges follow the
-// bezel curve while the tops and bottoms use the tall middle of the screen.
-static constexpr float EYE_WIDTH = 92.0f;         // full width of one eye at rest
-static constexpr float EYE_HEIGHT = 124.0f;       // full height of one eye at rest
-static constexpr float EYE_SPACING = 106.0f;      // centre-to-centre distance
-static constexpr float EYE_CENTER_X = SCREEN_CX;  // midpoint between the eyes
-static constexpr float EYE_CENTER_Y = 117.0f;     // eye centres (a hair above screen centre)
-static constexpr float EYE_IRIS_RADIUS = 21.0f;   // iris radius at rest
-static constexpr float PUPIL_TRAVEL = 0.80f;      // 0..1: how far the iris may roam inside the eye
+// ---- The two eye colours ---------------------------------------------------
+// The background is always pure black. The eyes use exactly these two colours
+// and nothing else: no gradients, glows, shading or anti-aliased edge pixels.
+// 24-bit 0xRRGGBB values (shown as the nearest RGB565 colour on the panel).
+static constexpr uint32_t EYE_COLOR = 0x8A2EFF;     // primary: the eye shapes
+static constexpr uint32_t ACCENT_COLOR = 0xF2EAFF;  // secondary: pupils and accents (hearts, spirals)
 
-// ---- Motion limits -------------------------------------------------------------
-static constexpr float MAX_GAZE_SHIFT_X = 9.0f;   // whole-eye travel at full gaze, px
-static constexpr float MAX_GAZE_SHIFT_Y = 7.0f;
-static constexpr float MAX_EXPRESSION_EXPANSION = 1.16f; // biggest size any expression may reach
-static constexpr float EYE_PERSPECTIVE = 0.035f;  // far eye shrinks this much at full side gaze
-static constexpr float SQUASH_STRETCH = 1.0f;     // 0 disables velocity squash & stretch
+// ---- Eye size and layout, as fractions of the screen -------------------------
+// Everything scales with the display: sizes are fractions of the smaller
+// screen side, positions are relative to the screen centre.
+static constexpr float EYE_WIDTH = 0.35f;         // width of one eye at rest
+static constexpr float EYE_HEIGHT = 0.48f;        // height of one eye at rest
+static constexpr float EYE_SPACING = 0.44f;       // centre-to-centre distance between the eyes
+static constexpr float EYE_OFFSET_Y = -0.01f;     // whole face up (-) or down (+) from the centre
+static constexpr float EYE_ROUNDNESS = 0.46f;     // corners: 0 sharp box .. 1 fully rounded capsule
+static constexpr float PUPIL_SIZE = 0.43f;        // pupil radius, as a fraction of the eye's half width
+static constexpr float PUPIL_ROUNDNESS = 0.70f;   // 1 = circle, lower = squarer (robotic)
 
-// ---- Animation feel ------------------------------------------------------------
-static constexpr float ANIMATION_SPEED = 1.0f;    // >1 snappier springs, <1 lazier (0.6 .. 1.6)
+// ---- Movement limits ---------------------------------------------------------
+static constexpr float MAX_PUPIL_MOVE = 0.62f;    // 0..1: how far a pupil may roam inside its eye
+static constexpr float MAX_EYE_MOVE_X = 0.040f;   // how far the whole eyes follow the gaze, of screen
+static constexpr float MAX_EYE_MOVE_Y = 0.030f;
+static constexpr float MAX_EXPRESSION_EXPANSION = 1.15f; // largest size any expression may reach
+
+// ---- Animation -----------------------------------------------------------------
+static constexpr float ANIMATION_SPEED = 1.0f;    // >1 snappier, <1 lazier (0.6 .. 1.6)
 static constexpr float EXPRESSION_INTENSITY = 1.0f; // 0.5 subtle .. 1.3 exaggerated
-static constexpr uint32_t BLINK_MIN_MS = 2200;    // gap between spontaneous blinks
-static constexpr uint32_t BLINK_MAX_MS = 7000;
-static constexpr float DOUBLE_BLINK_CHANCE = 0.10f;
-static constexpr float ANGER_COOLDOWN_S = 4.0f;   // grumpy lids linger this long after anger
+static constexpr float EXPRESSION_BLEND_SPEED = 1.0f; // how quickly one expression morphs into the next
+static constexpr uint16_t BLINK_CLOSE_MS = 70;    // blink speed: a fast close...
+static constexpr uint16_t BLINK_OPEN_MS = 150;    // ...and a slightly slower open
+static constexpr uint32_t BLINK_MIN_MS = 2200;    // blink frequency: time between blinks
+static constexpr uint32_t BLINK_MAX_MS = 6500;
+static constexpr float DOUBLE_BLINK_CHANCE = 0.12f;
+static constexpr float GAZE_SPEED = 1.0f;         // how quickly the eyes move to a new target
+static constexpr float IDLE_LIVELINESS = 1.0f;    // idle look-arounds and fidgets: 0 still .. 1.5 restless
+static constexpr float SQUASH_STRETCH = 1.0f;     // 0 disables velocity squash & stretch
+static constexpr float ANGER_COOLDOWN_S = 4.0f;   // lids stay a little grumpy this long after anger
 
-// ---- Look ----------------------------------------------------------------------
-// Flat cartoon eyes: a smooth solid eye shape with a big solid pupil and a soft
-// purple glow on black. The pupils change shape with the mood: star glints,
-// hearts when happy, spirals when dizzy. Four styles, each with its own
-// personality (four quick taps cycles them):
-//   0 BEAN  leaning egg pupils with a twinkling star glint   -- calm & curious
-//   1 DOT   little star-shaped pupils                         -- shy
-//   2 BLIP  big round sparkly pupils, rounder eyes            -- playful
-//   3 CAT   slit pupils that dilate when startled             -- sassy
-static constexpr uint8_t DEFAULT_EYE_STYLE = 0;
-struct EyeColors {
-  uint8_t body[3];    // the eye shape
-  uint8_t pupilL[3];  // left pupil (odd-coloured eyes are part of the charm)
-  uint8_t pupilR[3];  // right pupil
-  uint8_t glow[3];    // the soft halo around the eye
-};
-static constexpr EyeColors STYLE_COLORS[4] = {
-  {{226, 212, 255}, {88, 22, 205}, {176, 40, 222}, {124, 40, 255}},  // BEAN: lavender, deep purple / magenta
-  {{214, 206, 255}, {70, 30, 170}, {70, 30, 170}, {96, 70, 255}},    // DOT: periwinkle, indigo stars
-  {{240, 214, 255}, {150, 24, 214}, {150, 24, 214}, {200, 70, 255}}, // BLIP: pink-lilac, orchid
-  {{206, 184, 255}, {36, 8, 84}, {36, 8, 84}, {140, 70, 255}},       // CAT: violet, near-black slits
-};
-static constexpr float GLOW_STRENGTH = 0.85f;     // brightness of the halo at the eye edge
-static constexpr float GLOW_FALLOFF = 6.5f;       // px for the halo to fade to ~37%
-static constexpr float GLOW_EXTENT = 16.0f;       // halo fades to zero by this distance (cost grows with it)
-static constexpr bool DITHER = true;              // ordered dithering hides RGB565 banding
+// ---- Display ------------------------------------------------------------------
+static constexpr int SCREEN_WIDTH = 240;
+static constexpr int SCREEN_HEIGHT = 240;
+// A round panel hides its corners: the eyes are then kept inside a circle.
+static constexpr bool SCREEN_IS_ROUND = true;
+static constexpr float SAFE_MARGIN = 0.065f;      // keep the eyes this far (of screen) from the edge
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
@@ -106,8 +91,9 @@ static constexpr uint32_t TOUCH_RELEASE_TIMEOUT_MS = 250; // no report this long
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to
 // black, then the screen and ESP32 power down (deep sleep). A touch or a shake
-// wakes it again (the same shake that makes it dizzy; see the shake settings). Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it
-// then naps with a dim, breathing glow after IDLE_NAP_MS.
+// wakes it again (a steady shake of about 4 s; see the shake settings).
+// Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it then naps
+// with dimmed, closed eyes after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
 static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // power-save timeout when AUTO_DEEP_SLEEP
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
@@ -116,7 +102,13 @@ static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
 
 // ---- Derived (do not edit) -------------------------------------------------------
-static constexpr float EYE_HALF_WIDTH = EYE_WIDTH * 0.5f;
-static constexpr float EYE_HALF_HEIGHT = EYE_HEIGHT * 0.5f;
-// Expression offsets are authored for a 48 px half-height eye and scale with size.
-static constexpr float EYE_PX_SCALE = EYE_HALF_HEIGHT / 48.0f;
+static constexpr float SCREEN_MIN_SIDE = float(SCREEN_WIDTH < SCREEN_HEIGHT ? SCREEN_WIDTH : SCREEN_HEIGHT);
+static constexpr float SCREEN_CX = (SCREEN_WIDTH - 1) * 0.5f;    // pixel centres are whole numbers
+static constexpr float SCREEN_CY = (SCREEN_HEIGHT - 1) * 0.5f;
+static constexpr float SCREEN_RADIUS = SCREEN_MIN_SIDE * 0.5f;
+static constexpr float SAFE_RADIUS = SCREEN_RADIUS - SAFE_MARGIN * SCREEN_MIN_SIDE;
+static constexpr float EYE_HALF_WIDTH = EYE_WIDTH * SCREEN_MIN_SIDE * 0.5f;   // px
+static constexpr float EYE_HALF_HEIGHT = EYE_HEIGHT * SCREEN_MIN_SIDE * 0.5f; // px
+static constexpr float EYE_HALF_SPACING = EYE_SPACING * SCREEN_MIN_SIDE * 0.5f;
+static constexpr float EYE_CENTER_X = SCREEN_CX;
+static constexpr float EYE_CENTER_Y = SCREEN_CY + EYE_OFFSET_Y * SCREEN_MIN_SIDE;

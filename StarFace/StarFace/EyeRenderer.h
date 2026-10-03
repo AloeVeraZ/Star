@@ -2,12 +2,12 @@
 #include <Arduino.h>
 #include "FaceConfig.h"
 
-// Eye styles, each with its own look and personality (see CreatureAnimator).
+// Eye styles, each with its own pupils and personality (see CreatureAnimator).
 enum EyeStyle : uint8_t {
-  STYLE_NOVA,  // glowing orb, dark pupil in a ring of light   -- calm and curious
-  STYLE_HALO,  // hollow neon ring, bright floating dot pupil  -- shy
-  STYLE_BLIP,  // glowing capsule with scanlines, no pupil     -- playful
-  STYLE_CAT,   // glowing orb with a slit pupil                -- sassy
+  STYLE_BEAN,  // leaning egg pupils with a twinkling star glint -- calm and curious
+  STYLE_DOT,   // little star-shaped pupils                      -- shy
+  STYLE_BLIP,  // big round sparkly pupils                       -- playful
+  STYLE_CAT,   // slit pupils that dilate when startled          -- sassy
 };
 static constexpr uint8_t EYE_LOOK_COUNT = 4;
 
@@ -28,6 +28,9 @@ struct EyeGeom {
   float blink;          // 0..1 blink closure: the iris squashes with the eye
   float spiral;         // 0..1 dizzy spiral replaces the iris and pupil
   float spiralPhase;    // spiral rotation, radians
+  float heart;          // 0..1 pupils morph into hearts (happy, petted)
+  float twinkle;        // star glint size multiplier (~1, bursts higher)
+  float twinkleAngle;   // star glint / star pupil rotation, radians
   uint8_t style;        // EyeStyle
 };
 
@@ -43,15 +46,15 @@ void eyeDrawnExtent(const EyeGeom &e, float &cy, float &h);
 typedef void (*PushWindowFn)(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t *fb);
 
 // Procedural, anti-aliased eye renderer. Each eye is a signed-distance shape
-// (ellipse intersected with curved lids), shaded per pixel with a gradient
-// body, iris, pupil, highlights, lid shadow and an exponential glow. Coverage
+// (ellipse intersected with curved lids) filled flat, with a signed-distance
+// pupil (egg, star, slit or heart, blended for smooth morphs), star glints and
+// an exponential glow. Coverage
 // comes from the analytic distance, so edges look like vector art without
 // supersampling. Frames are composed off-screen and only the changed window is
 // pushed, so there is no flicker.
 class EyeRenderer {
  public:
   void begin(uint16_t *framebuffer, PushWindowFn pushFn);
-  void setPalette(uint8_t palette);
   void invalidate() { fullRedraw = true; }
   void draw(const EyeGeom eyes[2]);
   // Draws into the framebuffer without pushing (host previews, screenshots).
@@ -65,7 +68,6 @@ class EyeRenderer {
   PushWindowFn push = nullptr;
   bool fullRedraw = true;
   Box prev = {0, 0, -1, -1}, dirty = {0, 0, -1, -1};
-  RGB base = {195, 150, 255};
   uint8_t glowLut[int(GLOW_EXTENT * 4) + 2];
 
   Box bounds(const EyeGeom &e) const;

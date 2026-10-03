@@ -14,11 +14,13 @@ static float frand() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 1
 struct Motion {            // acceleration (m/s^2, incl. gravity) and spin (rad/s) at time t
   virtual void at(float t, float a[3], float g[3]) = 0;
 };
-struct Shake : Motion {    // back-and-forth along a direction, starting at t = 0.3 s
-  float amp, freq, spinAmp;
-  Shake(float A, float f, float s = 0) : amp(A), freq(f), spinAmp(s) {}
+struct Shake : Motion {    // back-and-forth along a direction, from t = 0.3 s (optionally with a pause)
+  float amp, freq, spinAmp, stopAt, pauseAt, pauseLen;
+  Shake(float A, float f, float s = 0, float stop = 1e9f, float pAt = 1e9f, float pLen = 0)
+      : amp(A), freq(f), spinAmp(s), stopAt(stop), pauseAt(pAt), pauseLen(pLen) {}
   void at(float t, float a[3], float g[3]) override {
-    float on = t > .3f ? 1.0f : 0.0f, w = 6.2831853f * freq * t;
+    bool paused = t > pauseAt && t < pauseAt + pauseLen;
+    float on = t > .3f && t < stopAt && !paused ? 1.0f : 0.0f, w = 6.2831853f * freq * t;
     a[0] = 1.5f + on * amp * sinf(w) * .9f;
     a[1] = 2.0f + on * amp * sinf(w) * .4f;
     a[2] = 9.4f + on * amp * .15f * sinf(2 * w) + (frand() - .5f) * .6f;
@@ -71,15 +73,16 @@ static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
   return -1;
 }
 
-// Mirrors confirmMotionWake(): samples every ~12 ms for 2.5 s after boot.
+// Mirrors confirmMotionWake(): samples every ~12 ms after boot until a steady
+// ~4 s shake is confirmed, or gives up when no shake starts or it stops.
 static int runWake(Motion &m, float bootDelay) {
   ShakeWakeCheck chk;
-  TwistDetector twist;
-  for (float tms = 0; tms < 2500; tms += 12) {
+  for (float tms = 0; tms < SHAKE_WAKE_HOLD_MS + 3000; tms += 12) {
     float a[3], g[3];
+    uint32_t now = uint32_t(tms) + 1;
     m.at(bootDelay + tms / 1000, a, g);
-    bool shake = chk.feed(a, g, uint32_t(tms) + 1);
-    if (shake || twist.feed(g, uint32_t(tms) + 1)) return int(tms);
+    if (chk.feed(a, g, now)) return int(tms);
+    if (!chk.shakingFor(now) && (tms > 1200 || chk.stopped(now))) break;
   }
   return -1;
 }
@@ -105,9 +108,6 @@ int main() {
     printf("Wrist flick (mostly rotation, 6 rad/s), %d ms loop: dizzy at %d ms\n", p, ms);
     if (ms < 0) ++fails;
   }
-  ms = runWake(*new Shake(4, 4, 6.0f), .7f);
-  printf("Wrist flick from sleep: %s\n", ms < 0 ? "stays asleep  <-- MISSED" : "turns on");
-  if (ms < 0) ++fails;
   struct { const char *name; Motion *m; } calm[] = {
     {"walking", new Walk(3.0f, 1.8f)}, {"brisk walking", new Walk(4.5f, 2.2f)},
     {"running", new Walk(8.0f, 2.8f)}, {"single knock", new Knock()},
@@ -139,13 +139,25 @@ int main() {
            resting ? "reacts" : "MISSED", carried ? "REACTS (wrong)" : "ignored");
     if (!resting || carried) ++fails;
   }
-  printf("\nWake from sleep: ms after boot until the face turns on (boot finishes 0.4 s into the shake)\n");
+  printf("\nWake from sleep needs a steady ~4 s shake (ms after boot; boot ends 0.4 s into the shake)\n");
   for (float A : amps) for (float f : {3.0f, 5.0f}) {
     ms = runWake(*new Shake(A, f), .7f);
-    printf("  shake %4.0f m/s^2 at %.0f Hz: %s", A, f, ms < 0 ? "stays asleep" : "");
+    printf("  steady shake %4.0f m/s^2 at %.0f Hz: %s", A, f, ms < 0 ? "stays asleep" : "");
     if (ms >= 0) printf("on after %d ms", ms);
-    if (A >= 12 && ms < 0) { ++fails; printf("  <-- MISSED"); }
+    bool bad = (A >= 12 && ms < 0) || (ms >= 0 && ms < 3800);
+    if (bad) { ++fails; printf("  <-- WRONG"); }
     printf("\n");
+  }
+  struct { const char *name; Motion *m; } brief[] = {
+    {"hard 2 s shake", new Shake(18, 4, 0, 2.3f)},
+    {"hard 3 s shake", new Shake(18, 4, 0, 3.3f)},
+    {"3 s + pause + 3 s", new Shake(18, 4, 0, 1e9f, 3.3f, .8f)},
+  };
+  for (auto &b : brief) {
+    ms = runWake(*b.m, .7f);
+    printf("  %-30s: %s%s\n", b.name, ms < 0 ? "stays asleep" : "turns on",
+           ms >= 0 ? "  <-- TOO EASY" : "");
+    if (ms >= 0) ++fails;
   }
   for (auto &c : calm) {
     ms = runWake(*c.m, c.name[0] == 's' ? .95f : 1.0f);

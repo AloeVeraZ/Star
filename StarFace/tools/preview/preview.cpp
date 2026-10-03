@@ -31,10 +31,10 @@ struct Sim {
   EyeRenderer r;
   CreatureAnimator c;
   uint32_t now = 0;
-  explicit Sim(uint8_t look = DEFAULT_EYE_STYLE, uint8_t palette = STYLE_PALETTE[DEFAULT_EYE_STYLE]) {
+  explicit Sim(uint8_t look = DEFAULT_EYE_STYLE) {
     previewRandomState() = 0x9E3779B9u;
     r.begin(fb, nullptr);
-    c.begin(&r, look, palette, 1, 0x5A17C3u, now);
+    c.begin(&r, look, 0x5A17C3u, now);
     c.setIdleActsAllowed(false);
   }
   void run(uint32_t ms) {
@@ -75,10 +75,14 @@ int main(int argc, char **argv) {
       sim.shot(out + "/sleeping.ppm"); }
     { Sim sim; sim.wake(); sim.c.react(ANGRY, sim.now, ANGRY_ANIM_MS); sim.run(ANGRY_ANIM_MS + 900);
       sim.shot(out + "/grumpy_after.ppm"); }
-    for (int look = 1; look < EYE_LOOK_COUNT; ++look) {
-      Sim sim(look, STYLE_PALETTE[look]); sim.wake(); sim.run(300);
-      static const char *names[] = {"nova", "halo", "blip", "cat"};
+    for (int look = 0; look < EYE_LOOK_COUNT; ++look) {
+      Sim sim(look); sim.wake(); sim.run(300);
+      static const char *names[] = {"bean", "dot", "blip", "cat"};
       sim.shot(out + "/style_" + names[look] + ".ppm");
+      sim.c.react(SURPRISED, sim.now, 1600); sim.run(300);
+      sim.shot(out + "/style_" + names[look] + "_surprised.ppm");
+      sim.c.react(HAPPY, sim.now, 2400); sim.run(700);
+      sim.shot(out + "/style_" + names[look] + "_happy.ppm");
     }
     return 0;
   }

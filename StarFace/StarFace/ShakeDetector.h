@@ -142,15 +142,18 @@ struct TwistDetector {
   }
 };
 
-// Wake check after the IMU's motion alarm woke the CPU with the screen dark:
-// the same shake that makes it dizzy while awake turns it on. Gravity is
-// estimated from scratch here (the CPU was off), starting from the first
-// sample scaled to 1 g, so a shake already under way is measured correctly
-// within a fraction of a second.
+// Wake check after the IMU's motion alarm woke the CPU with the screen dark.
+// Asleep it is deliberately hard to wake: it needs a steady shake, kept up for
+// SHAKE_WAKE_HOLD_MS (about 4 s); stop for longer than SHAKE_WAKE_DROPOUT_MS
+// and the count starts over. Gravity is estimated from scratch here (the CPU
+// was off), starting from the first sample scaled to 1 g.
 class ShakeWakeCheck {
  public:
-  uint8_t jolts = 0;   // strokes seen (for the log)
+  uint8_t jolts = 0;      // strokes in the current run (for the log)
   float lastJolt = 0;
+
+  uint32_t shakingFor(uint32_t now) const { return since ? now - since : 0; }
+  bool stopped(uint32_t now) const { return !since && lastOnAt && now - lastOnAt > 1000; }
 
   bool feed(const float a[3], const float g[3], uint32_t now) {
     float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
@@ -169,16 +172,24 @@ class ShakeWakeCheck {
     }
     float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
     ShakeDetector::Event ev = det.feed(lin, spin, now);
-    if (ev == ShakeDetector::STROKE || ev == ShakeDetector::STARTLE) {
+    if (ev == ShakeDetector::STROKE || ev == ShakeDetector::STARTLE || ev == ShakeDetector::DIZZY) {
       ++jolts;
       lastJolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
     }
-    return ev == ShakeDetector::DIZZY;
+    if (det.strength > SHAKE_WAKE_STRENGTH) {
+      if (!since) since = now;
+      lastOnAt = now;
+    } else if (since && now - lastOnAt > SHAKE_WAKE_DROPOUT_MS) {
+      since = 0;   // the shake stopped: start over
+      jolts = 0;
+    }
+    // Steady shaking for long enough, and really back and forth.
+    return since && now - since >= SHAKE_WAKE_HOLD_MS && jolts >= 6;
   }
 
  private:
   ShakeDetector det;
   float grav[3] = {0, 0, 0};
   bool seeded = false;
-  uint32_t lastAt = 0;
+  uint32_t lastAt = 0, since = 0, lastOnAt = 0;
 };

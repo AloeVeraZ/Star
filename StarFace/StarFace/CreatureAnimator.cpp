@@ -8,7 +8,7 @@ namespace {
 // The calm rest pose: dx, dy, width, height, open, lid angle, lid drop, lower lid,
 // pupil, bend. Pixel channels are authored for a 48 px half-height eye and are
 // scaled by EYE_PX_SCALE in compose(), so expressions grow with the eyes.
-const float IDLE_POSE[] = {0, 0, 1, 1, 1.0f, .045f, 6, 0, 1, 0};
+const float IDLE_POSE[] = {0, 0, 1, 1, 1.0f, .02f, .5f, 0, 1, 0};
 // Some channels react a little faster than others (blinky lids, quick pupils).
 const float CHANNEL_RATE[] = {1, 1, 1.1f, 1.1f, 1.25f, .9f, .9f, 1, 1.2f, .9f};
 
@@ -132,15 +132,13 @@ void setPose(float *p, float dx, float dy, float w, float h, float open,
 
 // ======================= setup & public API =======================
 
-void CreatureAnimator::begin(EyeRenderer *r, uint8_t look, uint8_t palette,
-                             uint8_t pers, uint32_t unitSeed, uint32_t now) {
+void CreatureAnimator::begin(EyeRenderer *r, uint8_t look, uint32_t unitSeed, uint32_t now) {
   renderer = r;
-  (void)pers; // the eye style decides the personality (see PERSONAS)
-  personality = look % EYE_LOOK_COUNT;
+  personality = look % EYE_LOOK_COUNT; // the eye style decides the personality (see PERSONAS)
   seed = unitSeed;
   // Stable per-unit asymmetry: one lid sits a little lower, one eye opens a hair less.
   int lowLid = seed & 1;
-  asymDrop[lowLid] = .8f + 1.2f * ((seed >> 3) & 15) / 15.0f;
+  asymDrop[lowLid] = .4f + .6f * ((seed >> 3) & 15) / 15.0f;
   asymDrop[1 - lowLid] = 0;
   int narrow = (seed >> 8) & 1;
   asymOpen[narrow] = -.012f - .018f * ((seed >> 9) & 7) / 7.0f;
@@ -149,7 +147,8 @@ void CreatureAnimator::begin(EyeRenderer *r, uint8_t look, uint8_t palette,
     for (int c = 0; c < P_COUNT; ++c) expr[i][c].snap(IDLE_POSE[c]);
     expr[i][P_OPEN].snap(.02f);
   }
-  applyLook(look, palette, true);
+  applyLook(look, true);
+  nextTwinkleAt = now + randMs(2500, 6000);
   glowS.snap(1);
   blLevel = 0;
   current = previous = IDLE;
@@ -208,18 +207,16 @@ void CreatureAnimator::showBattery(int percent, uint32_t now) {
   enterMood(BATTERY, now, BATTERY_SHOW_MS);
 }
 
-void CreatureAnimator::changeLook(uint8_t look, uint8_t palette, bool instant) {
+void CreatureAnimator::changeLook(uint8_t look, bool instant) {
   if (!instant && current == LOOK_CHANGE && age < 160) {
     pendingLook = look;
-    pendingPalette = palette;
     lookPending = true;
   } else {
-    applyLook(look, palette, instant);
+    applyLook(look, instant);
   }
 }
 
-void CreatureAnimator::applyLook(uint8_t look, uint8_t palette, bool instant) {
-  if (renderer) renderer->setPalette(palette);
+void CreatureAnimator::applyLook(uint8_t look, bool instant) {
   personality = look % EYE_LOOK_COUNT; // a new style brings its own personality
   baseW.target = lookHalfWidth(look);
   baseH.target = lookHalfHeight(look);
@@ -452,6 +449,10 @@ void CreatureAnimator::pickIdleGaze(uint32_t now) {
 }
 
 void CreatureAnimator::updateIdle(float dt, uint32_t now) {
+  if (int32_t(now - nextTwinkleAt) >= 0) {
+    twinkleBurst = 1.0f;
+    nextTwinkleAt = now + randMs(3000, 9000);
+  }
   if (int32_t(now - nextGazeAt) >= 0) pickIdleGaze(now);
 
   // Saccades: tiny, fast 1-3 px hops while looking at something.
@@ -847,7 +848,7 @@ void CreatureAnimator::updateExpression(float dt, uint32_t now) {
       else { f = 6; z = .35f; } // pops back open with a little overshoot
       if (lookPending && age >= 160) {
         lookPending = false;
-        applyLook(pendingLook, pendingPalette, false);
+        applyLook(pendingLook, false);
       }
       break;
     case BATTERY: {
@@ -1108,6 +1109,16 @@ void CreatureAnimator::updateMoodColour(float dt) {
   heat = approach(heat, hot, hot > heat ? 7.0f : 1.1f, dt); // flares fast, cools slowly
   glowS.target = bright;
   glowS.update(dt, 2.2f, .5f);
+
+  // Happy or petted: the pupils melt into hearts, popping in with a little
+  // overshoot and shrinking back out.
+  bool love = current == HAPPY || current == PETTED;
+  heartS.target = love ? 1.0f : 0.0f;
+  heartS.update(dt, love ? 3.2f : 4.0f, love ? .45f : .9f);
+  // The star glint turns slowly and now and then twinkles: a quick flare and spin.
+  twinkleBurst = approach(twinkleBurst, 0.0f, 3.0f, dt);
+  twinkleSpin += dt * (.35f + 9.0f * twinkleBurst);
+  if (twinkleSpin > TAU_F) twinkleSpin -= TAU_F;
 }
 
 // ---- Round-screen fit: keep each eye (and the bright part of its glow) inside
@@ -1204,6 +1215,9 @@ void CreatureAnimator::compose() {
     g.glow = glowS.pos * glowBreath;
     g.heat = heat;
     g.style = personality;
+    g.heart = clampf(heartS.pos, 0.0f, 1.15f);
+    g.twinkle = 1.0f + .10f * sinf(clock * 3.1f + i) + .55f * twinkleBurst;
+    g.twinkleAngle = twinkleSpin + i * .6f;
     g.blink = fmaxf(0.0f, c);
     // Dizzy: spiral pupils spin up as the tumble starts, slow down with it and
     // fade back into normal pupils during the recovery.

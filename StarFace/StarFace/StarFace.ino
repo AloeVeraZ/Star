@@ -55,7 +55,7 @@ float linX = 0, linY = 0; // smoothed gravity-free acceleration
 TouchTracker finger;
 uint32_t lastTouchActionAt = 0, lastSwipeAt = 0;
 uint32_t sleepRetryAt = 0, lastBatteryCheck = 0;
-uint8_t eyeLook = 0, palette = 0, personality = 0, tapStreak = 0;
+uint8_t eyeLook = 0, tapStreak = 0;
 uint32_t lastTapAt = 0;
 float dieTempC = 25.0f, batteryVolts = 0;
 int batteryPercent = -1;
@@ -64,14 +64,10 @@ Preferences prefs;
 
 TwistDetector activeTwist;
 
-void chooseLook(uint8_t look, uint8_t color, bool save, bool instant) {
+void chooseLook(uint8_t look, bool save, bool instant) {
   eyeLook = look % EYE_LOOK_COUNT;
-  palette = color % EYE_PALETTE_COUNT;
-  creature.changeLook(eyeLook, palette, instant);
-  if (save) {
-    prefs.putUChar("styleV3", eyeLook);
-    prefs.putUChar("colorV3", palette);
-  }
+  creature.changeLook(eyeLook, instant);
+  if (save) prefs.putUChar("styleV4", eyeLook);
 }
 
 void applyBacklight(float level) {
@@ -192,8 +188,7 @@ void finishTap(int x, int y, uint32_t now) {
   if (tapStreak >= 4) {
     // Four quick taps: blink into the next eye style (and its personality).
     react(LOOK_CHANGE, now, 1400);
-    uint8_t next = (eyeLook + 1) % EYE_LOOK_COUNT;
-    chooseLook(next, STYLE_PALETTE[next], true, false);
+    chooseLook(eyeLook + 1, true, false);
     tapStreak = 0;
   } else if (tapStreak == 3) react(ANXIOUS, now, 1300);
   else if (tapStreak == 2) react(SURPRISED, now, 900);
@@ -610,28 +605,26 @@ bool enterDeepSleep(bool lcdReady) {
 }
 
 // After the IMU's coarse motion alarm woke the CPU (screen still dark): turn
-// the face on for a shake (see ShakeWakeCheck) or a back-and-forth twist.
-// Anything gentler, like a walking step, goes straight back to sleep.
+// the face on only after a steady shake of about 4 seconds (ShakeWakeCheck).
+// Anything less, like walking or a short shake, goes straight back to sleep.
 bool confirmMotionWake() {
-  const uint32_t window = 2500;
-  uint32_t began = millis();
-  TwistDetector twist;
+  uint32_t began = millis(), lastLogAt = 0;
   ShakeWakeCheck shake;
-  while (millis() - began < window) {
+  while (millis() - began < SHAKE_WAKE_HOLD_MS + 3000) {
     float a[3], g[3];
     readMotion(a, g);
     uint32_t now = millis();
-    uint8_t before = shake.jolts;
-    bool woke = shake.feed(a, g, now) || twist.feed(g, now);
-    if (LOG_SHAKE && shake.jolts != before)
-      Serial.printf("wake stroke %u: %.1f m/s^2\n", shake.jolts, shake.lastJolt);
-    if (woke) return true;
-    // Walking can trip the motion alarm; without any shake stroke or twist
-    // soon after boot, go straight back to sleep to save the battery.
-    if (!shake.jolts && !twist.active() && now - began > 900) break;
+    if (shake.feed(a, g, now)) return true;
+    if (LOG_SHAKE && now - lastLogAt >= 500 && shake.shakingFor(now)) {
+      lastLogAt = now;
+      Serial.printf("wake: shaking for %lu / %lu ms\n", (unsigned long)shake.shakingFor(now),
+                    (unsigned long)SHAKE_WAKE_HOLD_MS);
+    }
+    // Save the battery: give up quickly if no shake starts, or once it stops.
+    if (!shake.shakingFor(now) && (now - began > 1200 || shake.stopped(now))) break;
     delay(10);
   }
-  if (LOG_SHAKE) Serial.printf("wake check: %u shake stroke(s), not enough\n", shake.jolts);
+  if (LOG_SHAKE) Serial.println("wake check: no steady 4 s shake; back to sleep");
   return false;
 }
 
@@ -711,14 +704,12 @@ void setup() {
   randomSeed(esp_random());
   prefs.begin("starface", false);
   uint64_t mac = ESP.getEfuseMac();
-  // The eye style sets the personality; the style and colour are remembered.
-  eyeLook = prefs.getUChar("styleV3", DEFAULT_EYE_STYLE) % EYE_LOOK_COUNT;
-  palette = prefs.getUChar("colorV3", STYLE_PALETTE[eyeLook]) % EYE_PALETTE_COUNT;
-  personality = eyeLook;
-  Serial.printf("Eye style=%u palette=%u\n", eyeLook, palette);
+  // The eye style sets the pupils and the personality; it is remembered.
+  eyeLook = prefs.getUChar("styleV4", DEFAULT_EYE_STYLE) % EYE_LOOK_COUNT;
+  Serial.printf("Eye style=%u\n", eyeLook);
   lastActivity = millis();
   renderer.begin(BlackImage, LCD_1IN28_DisplayWindows);
-  creature.begin(&renderer, eyeLook, palette, personality,
+  creature.begin(&renderer, eyeLook,
                  uint32_t(mac ^ (mac >> 32)), lastActivity);
   readBattery();
   lastBatteryCheck = lastActivity;

@@ -44,39 +44,49 @@ static constexpr float DOUBLE_BLINK_CHANCE = 0.10f;
 static constexpr float ANGER_COOLDOWN_S = 4.0f;   // grumpy lids linger this long after anger
 
 // ---- Look ----------------------------------------------------------------------
-// The eyes are light, not paint: a glowing body, a neon outline and a soft
-// bloom on black. Four styles, each with its own personality (four quick taps
-// cycles them): 0 NOVA calm & curious, 1 HALO shy, 2 BLIP playful, 3 CAT sassy.
+// Flat cartoon eyes: a smooth solid eye shape with a big solid pupil and a soft
+// purple glow on black. The pupils change shape with the mood: star glints,
+// hearts when happy, spirals when dizzy. Four styles, each with its own
+// personality (four quick taps cycles them):
+//   0 BEAN  leaning egg pupils with a twinkling star glint   -- calm & curious
+//   1 DOT   little star-shaped pupils                         -- shy
+//   2 BLIP  big round sparkly pupils, rounder eyes            -- playful
+//   3 CAT   slit pupils that dilate when startled             -- sassy
 static constexpr uint8_t DEFAULT_EYE_STYLE = 0;
-static constexpr uint8_t EYE_PALETTE_COUNT = 7;
-static constexpr uint8_t EYE_PALETTE[EYE_PALETTE_COUNT][3] = {
-  {124, 40, 255},  // 0 deep purple (default)
-  {84, 64, 255},   // 1 ultraviolet
-  {214, 60, 255},  // 2 orchid
-  {150, 84, 255},  // 3 violet
-  {255, 64, 170},  // 4 neon pink
-  {40, 210, 255},  // 5 electric cyan
-  {255, 170, 40},  // 6 amber
+struct EyeColors {
+  uint8_t body[3];    // the eye shape
+  uint8_t pupilL[3];  // left pupil (odd-coloured eyes are part of the charm)
+  uint8_t pupilR[3];  // right pupil
+  uint8_t glow[3];    // the soft halo around the eye
 };
-// The colour each style wears (index into EYE_PALETTE). All purples by default.
-static constexpr uint8_t STYLE_PALETTE[4] = {0, 1, 2, 3};
-static constexpr float GLOW_STRENGTH = 1.15f;      // brightness of the bloom at the eye edge
-static constexpr float GLOW_FALLOFF = 7.0f;       // px for the bloom to fade to ~37%
-static constexpr float GLOW_EXTENT = 18.0f;       // bloom fades to zero by this distance (cost grows with it)
+static constexpr EyeColors STYLE_COLORS[4] = {
+  {{226, 212, 255}, {88, 22, 205}, {176, 40, 222}, {124, 40, 255}},  // BEAN: lavender, deep purple / magenta
+  {{214, 206, 255}, {70, 30, 170}, {70, 30, 170}, {96, 70, 255}},    // DOT: periwinkle, indigo stars
+  {{240, 214, 255}, {150, 24, 214}, {150, 24, 214}, {200, 70, 255}}, // BLIP: pink-lilac, orchid
+  {{206, 184, 255}, {36, 8, 84}, {36, 8, 84}, {140, 70, 255}},       // CAT: violet, near-black slits
+};
+static constexpr float GLOW_STRENGTH = 0.85f;     // brightness of the halo at the eye edge
+static constexpr float GLOW_FALLOFF = 6.5f;       // px for the halo to fade to ~37%
+static constexpr float GLOW_EXTENT = 16.0f;       // halo fades to zero by this distance (cost grows with it)
 static constexpr bool DITHER = true;              // ordered dithering hides RGB565 banding
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
 // raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
 // print each stroke's strength over serial while you tune.
-static constexpr float SHAKE_STROKE_MS2 = 8.0f;   // one stroke of a shake (~0.8 g beyond gravity)
+static constexpr float SHAKE_STROKE_MS2 = 6.5f;   // one stroke of a shake (~0.65 g beyond gravity)
 static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 3; // back-and-forth strokes for the dizzy spell
 static constexpr uint32_t SHAKE_GAP_MS = 500;     // longest pause between strokes of one shake
 static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
 static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for a full-strength rattle
 // Dizzy also triggers on sustained hard shaking, however the strokes line up:
-static constexpr float SHAKE_DIZZY_STRENGTH = 4.5f; // average shake strength (m/s^2 above noise)...
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 450; // ...kept up for this long
+static constexpr float SHAKE_DIZZY_STRENGTH = 3.5f; // average shake strength (m/s^2 above noise)...
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 400; // ...kept up for this long
+// Asleep it is much harder to wake: it takes a steady shake, kept up for
+// SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
+static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking
+static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 4000; // ...for this long
+static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster than this counts as shaking
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap

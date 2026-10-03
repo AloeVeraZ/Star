@@ -15,20 +15,17 @@ static constexpr int SW = 240, SH = 240;
 // ---- Shape constants (px) ----
 static constexpr float MIN_HALF_HEIGHT = 1.9f;   // a shut eye stays a soft glowing arc
 static constexpr float CLOSE_LINE_DROP = 0.20f;  // shut line sits below centre: the upper lid travels further
-static constexpr float LID_SHADOW = 8.0f;        // soft shade under the upper lid
 static constexpr float LID_ROUNDING = 4.0f;      // px of rounding where a lid meets the eye outline
 static constexpr float CLOSED_WIDTH = 0.84f;     // a shut eye is this much narrower (lid corners meet)
-static constexpr float IRIS_DROP = 0.10f;        // irises sit a touch low, which reads as cute
 static constexpr float SPIRAL_TURNS = 2.6f;      // arms of the dizzy spiral across the iris radius
 static constexpr float SPIRAL_HALF_WIDTH = 0.21f; // spiral line half width, in turns
 // Reciprocals for the shading ramps (no divisions in the per-pixel loop).
-static constexpr float INV_SHADOW = 1.0f / (LID_SHADOW + .5f);
 static constexpr float INV_EDGE_BAND = 1.0f / (SCREEN_RADIUS - SAFE_RADIUS);
 
-// Eye shapes per style (NOVA, HALO, BLIP, CAT), as multiples of the base size.
-static const float LOOK_W[EYE_LOOK_COUNT] = {1.00f, 1.00f, 1.06f, 1.02f};
-static const float LOOK_H[EYE_LOOK_COUNT] = {1.00f, 0.96f, 0.84f, 0.98f};
-static const float LOOK_IRIS[EYE_LOOK_COUNT] = {1.00f, 0.92f, 1.00f, 1.05f};
+// Eye shapes per style (BEAN, DOT, BLIP, CAT), as multiples of the base size.
+static const float LOOK_W[EYE_LOOK_COUNT] = {1.00f, 0.96f, 1.05f, 1.00f};
+static const float LOOK_H[EYE_LOOK_COUNT] = {1.02f, 0.95f, 0.92f, 1.00f};
+static const float LOOK_IRIS[EYE_LOOK_COUNT] = {1.00f, 1.00f, 1.00f, 1.00f};
 
 float lookHalfWidth(uint8_t look) { return EYE_HALF_WIDTH * LOOK_W[look % EYE_LOOK_COUNT]; }
 float lookHalfHeight(uint8_t look) { return EYE_HALF_HEIGHT * LOOK_H[look % EYE_LOOK_COUNT]; }
@@ -121,10 +118,6 @@ void EyeRenderer::begin(uint16_t *framebuffer, PushWindowFn pushFn) {
   }
 }
 
-void EyeRenderer::setPalette(uint8_t p) {
-  p %= EYE_PALETTE_COUNT;
-  base = {float(EYE_PALETTE[p][0]), float(EYE_PALETTE[p][1]), float(EYE_PALETTE[p][2])};
-}
 
 EyeRenderer::Box EyeRenderer::bounds(const EyeGeom &e) const {
   float cy, h;
@@ -150,19 +143,62 @@ inline float smax(float a, float b, float k, float quarterInvK) {
 float colShift[SW], upY[SW], upN[SW], loY[SW], loN[SW];
 } // namespace
 
-// Per-style shape and shading parameters (see EyeStyle in EyeRenderer.h).
+// Per-style eye and pupil shapes (see EyeStyle in EyeRenderer.h). Pupil sizes
+// are fractions of the eye's half width (pw) and half height (ph).
+enum PupilShape : uint8_t { P_EGG, P_STAR };
 struct StyleSpec {
-  float round;      // corner rounding of the outline, px (big = capsule)
-  float band;       // edge band shaded by distance (fast path is deeper than this)
-  float regionX, regionY; // pupil effect extent, in iris radii
-  float shadow;     // strength of the soft shade under the upper lid
+  float round;     // corner rounding of the eye outline, px
+  PupilShape shape;
+  float pw, ph;    // pupil half width / half height (STAR: ph = star radius)
+  float egg;       // EGG: how much wider the pupil is at the bottom
+  float drop;      // pupil sits this far below the eye centre (x half height)
+  float lean;      // pupil tilt toward the nose, radians
+  float eyeLean;   // whole eye tilt, top outward, radians
+  float glintR;    // star glint radius (x pupil half width), 0 = none
+  float glintU, glintV; // glint position in the pupil (x pw, x ph)
 };
 static const StyleSpec STYLES[EYE_LOOK_COUNT] = {
-  {3.0f, 7.0f, 1.45f, 1.45f, .16f},  // NOVA: glowing orb, deep pupil in a ring of light
-  {3.0f, 13.0f, 2.3f, 2.3f, 0.0f},   // HALO: hollow neon ring, bright dot pupil
-  {15.0f, 7.0f, 1.25f, 1.25f, .10f}, // BLIP: glowing capsule, scanlines, light spot
-  {3.0f, 7.0f, 1.15f, 2.0f, .16f},   // CAT: glowing orb, slit pupil
+  // round shape  pw    ph    egg   drop  lean  eyeLean glintR glintU glintV
+  {3.0f, P_EGG,  .40f, .88f, .32f, .27f, .17f, .06f,  .50f, -.30f, -.50f},  // BEAN
+  {3.0f, P_STAR, .24f, .24f, 0,    .02f, 0,    0,     0,     0,     0},      // DOT
+  {11.f, P_EGG,  .30f, .33f, 0,    .02f, 0,    0,     .58f, -.32f, -.34f},  // BLIP
+  {3.0f, P_EGG,  .085f, .64f, .05f, .08f, 0,   .04f,  0,     0,     0},      // CAT
 };
+
+// Exact signed distance to a five-pointed star of radius r and inner ratio rf
+// (Inigo Quilez). y points up.
+static inline float sdStar5(float x, float y, float r, float rf) {
+  const float k1x = .809016994f, k1y = -.587785252f, k2x = -k1x, k2y = k1y;
+  x = fabsf(x);
+  float d1 = fmax2(k1x * x + k1y * y, 0.0f);
+  x -= 2.0f * d1 * k1x; y -= 2.0f * d1 * k1y;
+  float d2 = fmax2(k2x * x + k2y * y, 0.0f);
+  x -= 2.0f * d2 * k2x; y -= 2.0f * d2 * k2y;
+  x = fabsf(x);
+  y -= r;
+  const float bax = rf * -k1y, bay = rf * k1x - 1.0f;
+  const float invBB = 1.0f / (bax * bax + bay * bay);
+  float hh = clampf((x * bax + y * bay) * invBB, 0.0f, r);
+  float ex = x - bax * hh, ey = y - bay * hh;
+  float len = fsqrt(ex * ex + ey * ey);
+  return (y * bax - x * bay) < 0 ? -len : len;
+}
+
+// Exact signed distance to a heart with its tip at the origin and lobes up to
+// y ~ 1.1, half width ~ 0.6 (Inigo Quilez). y points up.
+static inline float sdHeart(float x, float y) {
+  x = fabsf(x);
+  if (y + x > 1.0f) {
+    float ax = x - .25f, ay = y - .75f;
+    return fsqrt(ax * ax + ay * ay) - .353553391f;
+  }
+  float ax = x, ay = y - 1.0f;
+  float m = .5f * fmax2(x + y, 0.0f);
+  float bx = x - m, by = y - m;
+  float da = ax * ax + ay * ay, db = bx * bx + by * by;
+  float d = fsqrt(da < db ? da : db);
+  return x - y < 0 ? -d : d;
+}
 
 // One eye = ellipse ∩ below the upper lid ∩ above the lower lid, all bent by
 // `bend`. d is an approximate signed distance in px (negative inside); it gives
@@ -170,6 +206,7 @@ static const StyleSpec STYLES[EYE_LOOK_COUNT] = {
 void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const uint8_t style = e.style % EYE_LOOK_COUNT;
   const StyleSpec &st = STYLES[style];
+  const EyeColors &pal = STYLE_COLORS[style];
   float cy, h;
   eyeDrawnExtent(e, cy, h);
   const float cx = e.x;
@@ -182,9 +219,13 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float crx = rx - round, cry = fmaxf(.35f, h - round);
   const float icrx2 = 1.0f / (crx * crx), icry2 = 1.0f / (cry * cry);
   const float minR = fminf(crx, cry);
-  const float innerK = fmaxf(0.0f, 1.0f - (st.band + 1.0f) / minR);
-  const float qInner = innerK * innerK; // q below this: deeper than the edge band
+  const float innerK = fmaxf(0.0f, 1.0f - 3.0f / minR);
+  const float qInner = innerK * innerK; // q below this: well inside the outline
   const bool thin = cry < crx * .5f;
+  const float nose = leftEye ? 1.0f : -1.0f; // +x points at the nose for the left eye
+  // The whole eye leans a touch outward at the top (only while open).
+  const float eyeLean = -nose * st.eyeLean * smoothstep(4.0f, 20.0f, h);
+  const float ecos = cosf(eyeLean), esin = sinf(eyeLean);
 
   // Lids flatten away as the eye shuts so a closed eye is one clean arc.
   const float k = smoothstep(2.0f, .4f * ry, h);
@@ -194,55 +235,54 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const bool hasLower = lower > .3f;
   const float lidRound = fmaxf(.05f, LID_ROUNDING * k);
   const float lidRoundQ = .25f / lidRound;
-  const float nose = leftEye ? 1.0f : -1.0f; // +x points at the nose for the left eye
   const float bend = e.bend;
 
-  // ---- Colours for this frame: everything is light, not paint ----
+  // ---- Colours: flat fills; anger flushes the eye pink and the pupil red ----
   const float heat = clamp01(e.heat);
-  const Col white = {255, 255, 255};
-  const Col c = mixc({base.r, base.g, base.b}, {255, 50, 70}, heat * .65f); // the eye's colour
-  const Col hot = mixc(c, white, .50f);       // white-hot core
-  const Col neon = mixc(c, white, .42f);      // bright outline
-  const Col dark = scalec(c, .10f);           // unlit inside (HALO)
-  const Col pupilC = scalec(c, .05f);         // near-black, tinted
-  const Col pupilDeep = mixc(scalec(c, .16f), {10, 0, 40}, .5f); // NOVA: deep indigo pupil
-  const Col spark = {255, 255, 255};
+  auto rgbOf = [](const uint8_t c[3]) { return Col{float(c[0]), float(c[1]), float(c[2])}; };
+  const Col body = mixc(rgbOf(pal.body), {255, 196, 206}, heat * .55f);
+  const Col pupilC = mixc(rgbOf(leftEye ? pal.pupilL : pal.pupilR), {214, 24, 52}, heat * .75f);
+  const Col glintC = {255, 255, 255};
   const float glowGain = GLOW_STRENGTH * fmaxf(0.0f, e.glow) / 255.0f;
-  const Col glowC = scalec(c, glowGain);
-  // Radial body gradient (NOVA, CAT): hot core fading to the deep colour.
-  Col radial[33];
-  for (int i = 0; i <= 32; ++i) radial[i] = mixc(hot, c, ss01(i / 32.0f * 1.15f - .1f));
+  const Col glowC = scalec(mixc(rgbOf(pal.glow), {255, 40, 70}, heat * .6f), glowGain);
 
-  // ---- Pupil effects (eye-local coordinates) ----
-  // They shrink into the lids as the eye shuts and squash with a blink.
-  const float irisShow = smoothstep(2.5f, 7.0f, h);
-  const float irisR = e.iris;
+  // ---- Pupil (eye-local coordinates) ----
+  // It is cut by the eye outline and lids, fades into the shut line, and
+  // squashes with a blink.
+  const float show = smoothstep(2.5f, 7.0f, h);
+  const float scale = e.iris / EYE_IRIS_RADIUS;      // expression size (surprise shrinks it)
   const float blinkSquash = 1.0f - .8f * clamp01(e.blink);
-  const float px = clampf(e.pupilX, -1.15f, 1.15f), py = clampf(e.pupilY, -1.15f, 1.15f);
-  const float travelX = fmaxf(0.0f, rx - irisR * .92f) * PUPIL_TRAVEL;
-  const float travelY = fminf(fmaxf(0.0f, ry - irisR) * PUPIL_TRAVEL * .75f, h * .55f);
-  const float iox = px * travelX, ioy = py * travelY + irisR * IRIS_DROP;
-  // Looking sideways squeezes the pupil a little (it is on a curved surface).
-  const float irx = irisR * (1.0f - .14f * fabsf(px));
-  const float iry = irisR * 1.06f * (1.0f - .07f * fabsf(py)) * blinkSquash;
-  const float iirx = 1.0f / irx, iiry = 1.0f / iry;
-  const float regX = irx * st.regionX + 1.0f, regY = iry * st.regionY + 1.0f;
-  const float spiral = clamp01(e.spiral);
-  const float spiralPx = irisR / SPIRAL_TURNS;     // px per spiral turn
-  const float spiralShift = e.spiralPhase * (1.0f / anim::TAU_F);
-  // A crisp sparkle (NOVA, CAT) lags the pupil a little: a fixed light source.
-  const bool hasSpark = style == STYLE_NOVA || style == STYLE_CAT || style == STYLE_BLIP;
-  const float hlShow = hasSpark ? smoothstep(8.0f, 18.0f, h) * (1.0f - .75f * spiral) : 0.0f;
-  const float hlSquash = 1.0f / fmaxf(.2f, blinkSquash);
-  const float hlSquashInv = fmaxf(.2f, blinkSquash);
-  float h1x, h1y, h1r, h2x, h2y, h2r;
-  if (style == STYLE_BLIP) { // a glint on the capsule's upper corner
-    h1x = -rx * .48f; h1y = -h * .50f; h1r = 3.2f * EYE_PX_SCALE;
-    h2x = -rx * .30f; h2y = -h * .62f; h2r = 1.6f * EYE_PX_SCALE;
-  } else {
-    h1x = iox * .86f - irisR * .30f; h1y = ioy * .86f - irisR * .34f; h1r = irisR * .22f;
-    h2x = iox * .86f + irisR * .30f; h2y = ioy * .86f + irisR * .30f; h2r = irisR * .09f;
+  float pw = st.pw * rx * scale, ph = st.ph * ry * scale;
+  if (style == STYLE_CAT) {
+    // A cat's slit widens into a round pupil when startled (small scale).
+    float dilate = clamp01((1.0f - scale) * 3.0f);
+    pw = anim::mix(st.pw * rx, .30f * rx, dilate);
+    ph = anim::mix(st.ph * ry, .34f * ry, dilate);
   }
+  ph *= blinkSquash;
+  const float px = clampf(e.pupilX, -1.15f, 1.15f), py = clampf(e.pupilY, -1.15f, 1.15f);
+  const float travelX = fmaxf(0.0f, rx - pw - 2.0f) * PUPIL_TRAVEL;
+  const float travelY = fminf((ry - ph) * .7f + ry * .12f, h * .6f);
+  const float pcx = px * travelX, pcy = py * travelY + st.drop * ry;
+  const float lean = nose * st.lean, lcos = cosf(lean), lsin = sinf(lean);
+  const float heart = clamp01(e.heart);
+  const float heartS = .62f * fminf(rx, ry) * fminf(scale, 1.2f) * blinkSquash; // heart size, px
+  const float spiral = clamp01(e.spiral);
+  const float spiralR = .56f * fminf(rx, ry);
+  const float spiralPx = spiralR / SPIRAL_TURNS;
+  const float spiralShift = e.spiralPhase * (1.0f / anim::TAU_F);
+  const float twCos = cosf(e.twinkleAngle), twSin = sinf(e.twinkleAngle);
+  // Star glint: in the pupil's own frame, so it leans with it.
+  const float glintR = st.glintR * pw * fmaxf(.2f, e.twinkle) * (1.0f - heart) * blinkSquash;
+  const float glintU = st.glintU * pw, glintV = st.glintV * ph;
+  const float dotR = style == STYLE_BLIP ? pw * .16f * blinkSquash * (1.0f - heart) : 0.0f;
+  // How far pupil effects can reach from the pupil centre (bounding box).
+  float pupilReach = st.shape == P_STAR ? ph * 1.1f : fmaxf(pw * (1.0f + st.egg), ph) + 2.0f;
+  pupilReach = fmaxf(pupilReach, heart > 0 ? heartS * 1.25f : 0.0f);
+  pupilReach = fmaxf(pupilReach, spiral > 0 ? spiralR + 1.5f : 0.0f) + 1.5f;
+  const float reachX = st.shape == P_STAR || heart > 0 || spiral > 0
+                           ? pupilReach
+                           : pw * (1.0f + st.egg) + ph * fabsf(lsin) + 3.0f;
 
   // ---- Bounds, clipped to the dirty window ----
   int x0 = max(clip.x0, int(floorf(cx - rx - GLOW_EXTENT)));
@@ -276,9 +316,8 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
   const float safe2 = SAFE_RADIUS * SAFE_RADIUS;
   const float screen2 = (SCREEN_RADIUS + .5f) * (SCREEN_RADIUS + .5f);
   const float glowEnd = GLOW_EXTENT - .3f;
-  const bool radialBody = style == STYLE_NOVA || style == STYLE_CAT;
-  const float shadowBand = LID_SHADOW;
-  const float inv2h = 1.0f / (2.0f * h);
+  const float iph = 1.0f / fmaxf(.5f, ph), iHeart = 1.0f / fmaxf(.5f, heartS);
+  const float pupilR2 = pupilReach * pupilReach;
 
   for (int y = y0; y <= y1; ++y) {
     // Only pixels inside the round panel are shaded.
@@ -287,16 +326,8 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
     if (span <= 0) continue;
     float half = sqrtf(span);
     int xa = max(x0, int(ceilf(SCREEN_CX - half))), xb = min(x1, int(floorf(SCREEN_CX + half)));
-    float v = clamp01((y - (cy - h)) * inv2h); // 0 top .. 1 bottom of the eye
-    // Light falls a little from top to bottom; BLIP adds retro scanlines.
-    float rowShade = 1.06f - .16f * v;
-    Col row;
-    if (style == STYLE_HALO) row = dark;
-    else if (style == STYLE_BLIP) {
-      row = scalec(mixc(hot, c, ss01(v * 1.1f)), (y % 3 == 0) ? .74f : 1.0f);
-    } else row = c; // radial bodies are shaded per pixel
-    uint16_t rowPacked[4];
-    for (int i = 0; i < 4; ++i) rowPacked[i] = pack565(row.r, row.g, row.b, i, y);
+    uint16_t bodyPacked[4];
+    for (int i = 0; i < 4; ++i) bodyPacked[i] = pack565(body.r, body.g, body.b, i, y);
     uint16_t *line = fb + y * SW;
 
     for (int x = xa; x <= xb; ++x) {
@@ -304,27 +335,21 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
       if (dx * dx * ibx2 + yy * yy * iby2 > 1.0f) continue;
 
       // Signed distance to the eye: max() intersects ellipse and lids.
-      float nx2 = dx * dx * icrx2, ny2 = yy * yy * icry2, q = nx2 + ny2;
+      float ex = dx * ecos + yy * esin, ey = -dx * esin + yy * ecos; // leaned eye frame
+      float nx2 = ex * ex * icrx2, ny2 = ey * ey * icry2, q = nx2 + ny2;
       bool deep = q < qInner;
       float dU = (upY[x] - y) * upN[x];
       float dL = hasLower ? (y - loY[x]) * loN[x] : -1e9f;
-      float lx = dx - iox, ly = yy - ioy;
-      bool inPupil = irisShow > 0 && fabsf(lx) < regX && fabsf(ly) < regY;
-      bool inSpark = hlShow > 0 && fabsf(dx - h1x) < h1r + 1.0f &&
-                     fabsf(yy - h1y) < h1r * hlSquashInv + 1.0f;
-      if (deep && !inPupil && !inSpark && dU <= -shadowBand && dL <= -shadowBand * .6f) {
-        // Fast path: most of the eye.
-        if (radialBody) {
-          Col b = scalec(radial[int(q * 32.0f)], rowShade);
-          line[x] = pack565(b.r, b.g, b.b, x, y);
-        } else {
-          line[x] = rowPacked[x & 3];
-        }
+      float lx = dx - pcx, ly = yy - pcy;
+      bool inPupil = show > 0 && fabsf(lx) < reachX && fabsf(ly) < pupilReach &&
+                     lx * lx + ly * ly < pupilR2 * 2.0f;
+      if (deep && !inPupil && dU <= -1.0f && dL <= -1.0f) {
+        line[x] = bodyPacked[x & 3]; // fast path: the flat body
         continue;
       }
       float dE;
       if (deep) {
-        dE = -st.band - 1.0f;
+        dE = -4.0f;
       } else if (q < 1e-8f) {
         dE = -minR;
       } else {
@@ -335,8 +360,8 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
         // along its long axis. The ellipse sits inside the capsule around that
         // axis, so the capsule distance is a lower bound that fixes the tips.
         if (thin) {
-          float sx = fmax2(fabsf(dx) - crx, 0.0f);
-          dE = fmax2(dE, fsqrt(sx * sx + yy * yy) - cry);
+          float sx = fmax2(fabsf(ex) - crx, 0.0f);
+          dE = fmax2(dE, fsqrt(sx * sx + ey * ey) - cry);
         }
         dE -= round;
       }
@@ -358,76 +383,59 @@ void EyeRenderer::renderEye(const EyeGeom &e, bool leftEye, const Box &clip) {
         continue;
       }
 
-      // ---- Eye body ----
-      Col col;
-      float edgeIn = -d; // px inside the visible outline (lids included)
-      if (style == STYLE_HALO) {
-        // A neon tube along the outline, dim and hollow inside.
-        float ring = ss01((edgeIn + .5f) * (1.0f / 2.0f)) * (1.0f - ss01((edgeIn - 3.0f) * (1.0f / 4.0f)));
-        float inner = 1.0f - ss01((edgeIn - 3.0f) * (1.0f / 9.0f)); // faint light spilling inward
-        col = mixc(mixc(dark, scalec(c, .55f), inner * .6f), neon, ring);
-      } else {
-        col = radialBody ? scalec(radial[int((q < 1.0f ? q : 1.0f) * 32.0f)], rowShade) : row;
-        // A thin bright outline just inside the edge, like a neon sign.
-        float line1 = ss01((edgeIn - .3f) * (1.0f / 1.4f)) * (1.0f - ss01((edgeIn - 2.2f) * (1.0f / 2.2f)));
-        col = mixc(col, neon, line1 * .7f);
-      }
+      // ---- Eye body: flat ----
+      Col col = body;
       if (inPupil) {
-        float ux = lx * iirx, uy = ly * iiry;
-        float kI = fsqrt(ux * ux + uy * uy); // 1 = one iris radius from the pupil centre
-        float show = irisShow;
-        if (style == STYLE_NOVA) {
-          // A deep pupil wrapped in a bright ring of light.
-          float ringGlow = 1.0f - ss01((kI - .60f) * (1.0f / .70f));
-          col = mixc(col, mixc(hot, white, .45f), ringGlow * ringGlow * .85f * show);
-          float inPup = clamp01((.60f - kI) * irx + .5f);
-          // The pupil glows faintly from its rim toward the middle.
-          Col pc = mixc(pupilDeep, scalec(c, .45f), ss01((kI - .25f) * (1.0f / .35f)) * .6f);
-          col = mixc(col, pc, inPup * show);
-        } else if (style == STYLE_HALO) {
-          // A bright floating dot with its own little glow.
-          float dotGlow = 1.0f - ss01((kI - .40f) * (1.0f / 1.6f));
-          col = mixc(col, neon, dotGlow * dotGlow * .8f * show);
-          col = mixc(col, mixc(c, white, .88f), clamp01((.40f - kI) * irx + .5f) * show);
-        } else if (style == STYLE_BLIP) {
-          // No pupil: a soft spot of extra light shows where it is looking.
-          float spot = 1.0f - ss01(kI * (1.0f / 1.2f));
-          col = mixc(col, mixc(hot, white, .5f), spot * .6f * show);
-        } else { // STYLE_CAT: a vertical slit with a glowing rim
-          float sx = lx * iirx * (1.0f / .27f), syy = ly * iiry * (1.0f / 1.15f);
-          float ks = fsqrt(sx * sx + syy * syy);
-          float rimGlow = 1.0f - ss01((ks - 1.0f) * (1.0f / .6f)); // fades out inside the region
-          col = mixc(col, hot, rimGlow * .5f * show);
-          col = mixc(col, pupilC, clamp01((1.0f - ks) * irx * .27f + .5f) * show);
+        // Pupil frame: leaned toward the nose, y down.
+        float pu = lx * lcos + ly * lsin, pv = -lx * lsin + ly * lcos;
+        float dP;
+        if (st.shape == P_STAR) {
+          // Star pupils, slowly turning.
+          float su = pu * twCos - pv * twSin, sv = pu * twSin + pv * twCos;
+          dP = sdStar5(su, -sv, ph - 1.5f, .52f) - 1.5f; // rounded points
+        } else {
+          // Egg: wider toward the bottom (egg > 0).
+          float w = pw * (1.0f + st.egg * clampf(pv * iph, -1.0f, 1.0f));
+          w = fmax2(.5f, w);
+          float iw = rsqrt2(w * w); // 1 / w without a slow division
+          float nx = pu * iw, ny = pv * iph, qq = nx * nx + ny * ny;
+          float kk = fsqrt(qq);
+          dP = qq > 1e-8f ? (kk - 1.0f) * kk * rsqrt1(nx * nx * iw * iw + ny * ny * iph * iph)
+                          : -(w < ph ? w : ph);
         }
-        if (spiral > 0 && kI < 1.08f) {
-          // Dizzy: a bright disc with a dark Archimedean spiral that spins.
-          float vv = kI * SPIRAL_TURNS - fastAtan2(ly, lx) * (1.0f / anim::TAU_F) - spiralShift;
-          float fr = vv - float(int(vv));
-          if (fr < 0) fr += 1.0f;
-          float arm = clamp01((SPIRAL_HALF_WIDTH - fabsf(fr - .5f)) * spiralPx + .5f);
-          Col sc = mixc(hot, pupilC, arm);
-          float disc = clamp01((1.0f - kI) * irx + .5f);
-          col = mixc(col, sc, disc * spiral * show);
+        if (heart > 0) {
+          // Happy: the pupil melts into a heart (upright, not leaned).
+          float hd = sdHeart(lx * iHeart, -ly * iHeart + .55f) * heartS;
+          dP = anim::mix(dP, hd, heart);
         }
-      }
-      if (hlShow > 0) {
-        // Highlights squash with a blink rather than fading to grey.
-        float hx = dx - h1x, hy = (yy - h1y) * hlSquash;
-        if (fabsf(hx) < h1r + 1.0f && fabsf(hy) < h1r + 1.0f) {
-          float a = clamp01(.5f - (fsqrt(hx * hx + hy * hy) - h1r)) * hlShow;
-          col = mixc(col, spark, a);
+        // (Dizzy: the spiral below replaces the pupil.)
+        float aP = clamp01(.5f - dP) * show * (1.0f - spiral);
+        col = mixc(col, pupilC, aP);
+        if (glintR > .6f && aP > 0) {
+          // A twinkling star glint on the pupil.
+          float gu = pu - glintU, gv = pv - glintV;
+          float tu = gu * twCos - gv * twSin, tv = gu * twSin + gv * twCos;
+          float dG = sdStar5(tu, -tv, glintR, .45f);
+          col = mixc(col, glintC, clamp01(.5f - dG) * aP);
         }
-        hx = dx - h2x; hy = (yy - h2y) * hlSquash;
-        if (fabsf(hx) < h2r + 1.0f && fabsf(hy) < h2r + 1.0f) {
-          float a = clamp01(.5f - (fsqrt(hx * hx + hy * hy) - h2r)) * hlShow * .9f;
-          col = mixc(col, spark, a);
+        if (dotR > .5f && aP > 0) {
+          float du = pu + .30f * pw, dv = pv - .38f * ph;
+          float dG = fsqrt(du * du + dv * dv) - dotR;
+          col = mixc(col, glintC, clamp01(.5f - dG) * aP);
         }
-      }
-      // A faint shade under the upper lid keeps the lid shape readable.
-      if (st.shadow > 0 && dU > -shadowBand) {
-        float s = ss01((dU + shadowBand) * INV_SHADOW);
-        col = scalec(col, 1.0f - st.shadow * k * s * s);
+        if (spiral > 0) {
+          // Dizzy: a spinning spiral replaces the pupil.
+          float kS = fsqrt(lx * lx + ly * ly) * (1.0f / spiralR);
+          if (kS < 1.06f) {
+            float vv = kS * SPIRAL_TURNS - fastAtan2(ly, lx) * (1.0f / anim::TAU_F) - spiralShift;
+            float fr = vv - float(int(vv));
+            if (fr < 0) fr += 1.0f;
+            float arm = clamp01((SPIRAL_HALF_WIDTH - fabsf(fr - .5f)) * spiralPx + .5f);
+            Col sc = mixc(body, pupilC, arm);
+            float disc = clamp01((1.0f - kS) * spiralR + .5f);
+            col = mixc(col, sc, disc * spiral * show);
+          }
+        }
       }
 
       float a = clamp01(.5f - d);

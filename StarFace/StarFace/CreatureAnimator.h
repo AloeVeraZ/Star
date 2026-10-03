@@ -26,8 +26,8 @@ class CreatureAnimator {
  public:
   typedef anim::Spring Spring;
 
-  void begin(EyeRenderer *renderer, uint8_t look, uint8_t palette,
-             uint8_t personality, uint32_t seed, uint32_t now);
+  // look: the eye style, which also sets the personality.
+  void begin(EyeRenderer *renderer, uint8_t look, uint32_t seed, uint32_t now);
 
   // ---- reactions ----
   // direct = caused by the user; it may interrupt anything except a dizzy spell.
@@ -37,7 +37,7 @@ class CreatureAnimator {
   void queue(Mood m, uint32_t at, uint32_t durationMs, int param = 0);
   void showBattery(int percent, uint32_t now);
   // Swaps eye shape and colors; applied while the eyes are shut during LOOK_CHANGE.
-  void changeLook(uint8_t look, uint8_t palette, bool instant);
+  void changeLook(uint8_t look, bool instant);
   // fromShake plays a startled wake into dizziness; touched favors a startled wake.
   void startWake(uint32_t now, bool fromShake, bool touched = false);
   // napLevel > 0: fall asleep but keep the screen glowing at that backlight level.
@@ -107,7 +107,7 @@ class CreatureAnimator {
   uint32_t batteryReturnRemaining = 0;
   float batteryAmount = .55f;
   bool lookPending = false;
-  uint8_t pendingLook = 0, pendingPalette = 0;
+  uint8_t pendingLook = 0;
   float impactX = 1, impactY = 0;
   uint32_t angrySquintUntil = 0, nextAngrySquint = 0;
   uint32_t nextDartAt = 0;
@@ -166,6 +166,10 @@ class CreatureAnimator {
 
   // Glow and colour mood
   Spring glowS;
+  // Shape-shifting pupils: hearts when happy, a twinkling star glint
+  Spring heartS;
+  float twinkleBurst = 0, twinkleSpin = 0;
+  uint32_t nextTwinkleAt = 0;
   float heat = 0;
   float grumpy = 0;                // lingering annoyance after anger, 1 -> 0
 
@@ -176,7 +180,7 @@ class CreatureAnimator {
   bool crossed(int32_t ms) const { return prevAge < ms && age >= ms; }
   bool napping() const { return current == SLEEPY && napLevel > 0 && age >= int32_t(SLEEP_SEQUENCE_MS); }
   void enterMood(Mood m, uint32_t now, uint32_t durationMs, float strength = 1);
-  void applyLook(uint8_t look, uint8_t palette, bool instant);
+  void applyLook(uint8_t look, bool instant);
 
   void updateMoodTimeline(uint32_t now);
   void updateIdle(float dt, uint32_t now);

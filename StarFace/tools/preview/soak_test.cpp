@@ -15,7 +15,7 @@ int main() {
   EyeRenderer r;
   CreatureAnimator c;
   r.begin(fb, nullptr);
-  c.begin(&r, 0, 0, 1, 0xC0FFEEu, 0);
+  c.begin(&r, 0, 0xC0FFEEu, 0);
   uint32_t now = 0, moodSince = 0;
   Mood lastMood = IDLE;
   const Mood moods[] = {HAPPY, SAD, ANGRY, DIZZY, SURPRISED, ANXIOUS, BOOP, PETTED,
@@ -35,7 +35,7 @@ int main() {
     else if (r100 < 10) c.startSleep(now, (esp_random() & 1) ? 0.0f : .3f);
     else if (r100 < 11) c.startWake(now, esp_random() & 1, esp_random() & 1);
     else if (r100 < 12) c.showBattery(int(esp_random() % 120) - 10, now);
-    else if (r100 < 13) c.changeLook(esp_random() % 4, esp_random() % 7, esp_random() & 1);
+    else if (r100 < 13) c.changeLook(esp_random() % 4, esp_random() & 1);
     else if (r100 < 20) { c.setPointer((esp_random() % 200) / 100.0f - 1, (esp_random() % 200) / 100.0f - 1, now);
                           c.setTouchPoint(esp_random() % 240, esp_random() % 240); }
     if (esp_random() % 120 == 0) held = !held;          // holds of a few seconds
@@ -49,7 +49,8 @@ int main() {
     for (int i = 0; i < 2; ++i) {
       const float v[] = {g[i].x, g[i].y, g[i].rx, g[i].ry, g[i].open, g[i].pupilX, g[i].pupilY, g[i].iris,
                          g[i].lidAngle, g[i].lidDrop, g[i].lowerLid, g[i].bend, g[i].glow, g[i].heat,
-                         g[i].blink, g[i].spiral, g[i].spiralPhase};
+                         g[i].blink, g[i].spiral, g[i].spiralPhase, g[i].heart, g[i].twinkle,
+                         g[i].twinkleAngle};
       for (float f : v) CHECK(isfinite(f), "t=%u eye %d non-finite value", now, i);
       CHECK(g[i].rx > 5 && g[i].rx < EYE_HALF_WIDTH * 1.25f, "t=%u eye %d rx=%.1f", now, i, g[i].rx);
       CHECK(g[i].ry > 5 && g[i].ry < EYE_HALF_HEIGHT * 1.25f, "t=%u eye %d ry=%.1f", now, i, g[i].ry);

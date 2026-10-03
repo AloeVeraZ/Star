@@ -13,6 +13,7 @@
 #include "Eyes.h"
 #include "CreatureAnimator.h"
 #include "ShakeDetector.h"
+#include "MotionGestures.h"
 #include "TouchTracker.h"
 
 // Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round).
@@ -36,9 +37,10 @@ static constexpr uint32_t FRAME_US = 16667;      // frame cap (~60 FPS); render 
 static constexpr uint32_t NAP_FRAME_US = 33333;  // 30 FPS is plenty while the eyes are shut
 static constexpr float MAX_FRAME_DT = .05f;      // a stall never turns into an animation jump
 static constexpr bool LOG_FPS = false;           // print frames per second over serial
-// Prints shake strength while it is being shaken (silent when still). Open the
-// serial monitor at 115200 to see whether the motion sensor responds and how
-// hard your shakes are; set false once tuned.
+// Prints shake strength while it is being shaken (silent when still), and
+// every knock, flick, rock and upside-down/face-down gesture. Open the serial
+// monitor at 115200 to see whether the motion sensor responds and how hard
+// your shakes and knocks are; set false once tuned.
 static constexpr bool LOG_SHAKE = true;
 
 // Power (sleep timeouts and backlight levels are in FaceConfig.h).
@@ -69,6 +71,33 @@ int batteryPercent = -1;
 uint32_t lastTempRead = 0, coldSince = 0, lastColdReaction = 0;
 
 TwistDetector activeTwist;
+ShakeDetector shaker;
+TiltFlickDetector flicker;
+RockDetector rocker;
+bool touchStuck = false;   // a touch that never lifts is being ignored
+
+// ---- Fast motion sampling on the second core ----
+// A knock on the case is over in a few milliseconds, far quicker than the
+// render loop samples the sensor, so a small task on core 0 reads the IMU
+// every FAST_SAMPLE_MS and looks for knocks. The render loop takes the latest
+// sample from it for everything else (tilt, shakes, flicks, rocking).
+static constexpr uint32_t FAST_SAMPLE_MS = 3;   // ~333 samples per second
+struct KnockReport { uint8_t count; float x, y; };
+portMUX_TYPE motionLock = portMUX_INITIALIZER_UNLOCKED;
+volatile bool samplerOn = false, samplerBusy = false;
+TaskHandle_t samplerTask = nullptr;
+float latestA[3] = {0, 0, 9.81f}, latestG[3] = {0, 0, 0};
+bool latestValid = false;
+KnockReport knockQueue[8];
+uint8_t knockHead = 0, knockTail = 0;
+// Wire locks the bus per transfer but hands the received bytes over after
+// unlocking, so two cores reading at once could swap each other's data. Every
+// sensor read that can overlap the sampler (touch, IMU temperature) holds this.
+SemaphoreHandle_t i2cMutex = nullptr;
+struct I2CGuard {
+  I2CGuard() { if (i2cMutex) xSemaphoreTake(i2cMutex, portMAX_DELAY); }
+  ~I2CGuard() { if (i2cMutex) xSemaphoreGive(i2cMutex); }
+};
 
 void applyBacklight(float level) {
   static int lastDuty = -1;
@@ -180,12 +209,10 @@ void pointAt(int x, int y, uint32_t now) {
   creature.setPointer((x - SCREEN_CX) / reach, (y - SCREEN_CY) / reach, now);
 }
 
-void finishTap(int x, int y, uint32_t now) {
-  if (now - lastTouchActionAt < 75) return;
-  lastTouchActionAt = now;
+// One tap (or knock) in a run of `streak`: 1 boop, 2 surprise, 3 anxious, 4 love.
+void tapReaction(int streak, int x, int y, uint32_t now) {
   pointAt(x, y, now);
-  tapStreak = now - lastTapAt < 430 ? min(4, int(tapStreak) + 1) : 1;
-  lastTapAt = now;
+  tapStreak = streak;
   if (tapStreak >= 4) {
     // Four quick taps: it falls in love (heart pupils).
     react(Mood::LOVED, now, 1800);
@@ -193,6 +220,14 @@ void finishTap(int x, int y, uint32_t now) {
   } else if (tapStreak == 3) react(Mood::ANXIOUS, now, 1300);
   else if (tapStreak == 2) react(Mood::SURPRISED, now, 900);
   else react(Mood::BOOP, now, 680);
+}
+
+void finishTap(int x, int y, uint32_t now) {
+  if (now - lastTouchActionAt < 75) return;
+  lastTouchActionAt = now;
+  int streak = now - lastTapAt < 430 ? min(4, int(tapStreak) + 1) : 1;
+  lastTapAt = now;
+  tapReaction(streak, x, y, now);
 }
 
 // A finger lifted after being held (no tap, no swipe).
@@ -208,9 +243,29 @@ void finishHold(const TouchTracker::Result &r, uint32_t now) {
 }
 
 void handleTouch(uint32_t now) {
+  if (!TOUCH_ENABLED) return;
   TouchTracker::Result r;
-  if (touch.available()) {
+  // A finger that never lifts is not a finger (a cover pressing on the glass,
+  // moisture): ignore it until it lifts, so it can't keep it angry or awake.
+  if (finger.tracking() && finger.heldFor(now) > TOUCH_STUCK_MS) {
+    finger.ignoreUntilLift(now);
+    touchStuck = true;
+    creature.setPointerHeld(false, now);
+    Serial.println("Touch held for too long: ignoring it until it lifts");
+  }
+  bool touched;
+  {
+    I2CGuard bus;
+    touched = touch.available();
+  }
+  if (touched) {
     auto d = touch.data;
+    bool wasStuck = touchStuck;
+    if (wasStuck && d.event == 1) touchStuck = false; // lifted at last
+    if (wasStuck) {
+      finger.feed(d.x, d.y, d.event, d.gestureID, true, now);
+      return;
+    }
     lastActivity = now;
     // Even if the controller reports a partial/invalid coordinate, its IRQ is
     // real activity. Never finish closing the eyes while a finger is present.
@@ -222,6 +277,7 @@ void handleTouch(uint32_t now) {
     r = finger.feed(d.x, d.y, d.event, d.gestureID, valid, now);
   } else {
     r = finger.poll(now); // a lift report can go missing
+    if (touchStuck && !finger.down) touchStuck = false;
   }
   switch (r.kind) {
     case TouchTracker::PRESS:
@@ -253,6 +309,86 @@ void readMotion(float a[3], float g[3]) {
     a[i] *= 0.00980665f;
     g[i] *= 0.017453293f;
   }
+}
+
+// Waveshare's QMI8658_config_acc() builds the accelerometer's low-pass
+// setting and then writes CTRL5 = 0, leaving it off: a knock is then a spike
+// of a millisecond or two that sampling easily misses. Turn the filter on
+// (~54 Hz: mode 2 at 1 kHz, well above any shake or step) next to the
+// gyro's, without changing the driver.
+void tuneImuFilters() {
+  uint8_t ctrl5 = 0;
+  QMI8658_read_reg(QMI8658Register_Ctrl5, &ctrl5, 1);
+  QMI8658_write_reg(QMI8658Register_Ctrl5, uint8_t((ctrl5 & 0xF0) | A_LSP_MODE_2 | 0x01));
+}
+
+void motionSamplerTask(void *) {
+  KnockDetector knocks;
+  TickType_t wakeAt = xTaskGetTickCount();
+  for (;;) {
+    if (!samplerOn) {
+      samplerBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(5));
+      wakeAt = xTaskGetTickCount();
+      continue;
+    }
+    samplerBusy = true;
+    float a[3], g[3];
+    {
+      I2CGuard bus;
+      readMotion(a, g);
+    }
+    KnockDetector::Event k = knocks.feed(a, g, millis());
+    portENTER_CRITICAL(&motionLock);
+    for (int i = 0; i < 3; ++i) { latestA[i] = a[i]; latestG[i] = g[i]; }
+    latestValid = true;
+    if (k.count && uint8_t(knockHead + 1) % 8 != knockTail) {
+      knockQueue[knockHead] = {k.count, k.x, k.y};
+      knockHead = (knockHead + 1) % 8;
+    }
+    portEXIT_CRITICAL(&motionLock);
+    const TickType_t period = pdMS_TO_TICKS(FAST_SAMPLE_MS);
+    vTaskDelayUntil(&wakeAt, period > 0 ? period : 1);
+  }
+}
+
+void startMotionSampler() {
+  if (!imuReady) return;
+  if (!i2cMutex) i2cMutex = xSemaphoreCreateMutex();
+  if (!samplerTask)
+    xTaskCreatePinnedToCore(motionSamplerTask, "motion", 4096, nullptr, 2, &samplerTask, 0);
+  samplerOn = true;
+}
+
+// Stops the fast sampler before the IMU is reconfigured (deep sleep).
+void stopMotionSampler() {
+  samplerOn = false;
+  for (int i = 0; i < 40 && samplerBusy; ++i) delay(2);
+  latestValid = false;
+}
+
+// The latest motion sample: from the fast sampler, or read directly.
+void currentMotion(float a[3], float g[3]) {
+  if (samplerOn && latestValid) {
+    portENTER_CRITICAL(&motionLock);
+    for (int i = 0; i < 3; ++i) { a[i] = latestA[i]; g[i] = latestG[i]; }
+    portEXIT_CRITICAL(&motionLock);
+  } else {
+    I2CGuard bus;
+    readMotion(a, g);
+  }
+}
+
+bool nextKnock(KnockReport &k) {
+  bool any = false;
+  portENTER_CRITICAL(&motionLock);
+  if (knockTail != knockHead) {
+    k = knockQueue[knockTail];
+    knockTail = (knockTail + 1) % 8;
+    any = true;
+  }
+  portEXIT_CRITICAL(&motionLock);
+  return any;
 }
 
 // Reacts to how the star is moved: inertia, bumps, shakes, pick-ups and naps.
@@ -295,11 +431,13 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   // strong push only sloshes them (so being carried, even running, stays
   // calm); a push back the other way startles it; a real shake (see
   // ShakeDetector) makes it dizzy, then angry, then it calms down.
-  static ShakeDetector shaker;
   static uint32_t lastLogAt = 0;
   float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
   ShakeDetector::Event ev = shaker.feed(lin, spin, now);
   if (shaker.rattle() > 0) creature.shake(shaker.rattle());
+  // Gestures that stand in for touch (see MotionGestures.h).
+  TiltFlickDetector::Dir flick = flicker.feed(a, g, shaker.strength, now);
+  bool rocking = rocker.feed(a, g, now);
   if (LOG_SHAKE && shaker.strength > 1.0f && now - lastLogAt > 200) {
     lastLogAt = now;
     Serial.printf("shake: strength %.1f (dizzy at %.1f)  jolt %.1f m/s^2  spin %.1f rad/s  strokes %u\n",
@@ -326,8 +464,26 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
     return;
   }
   if (sleepPreparing) return;
-  if (ev == ShakeDetector::BUMP) {
-    // A knock on the resting star: the eyes recoil and it looks startled.
+  if (flick != TiltFlickDetector::NONE) {
+    // Tipped one way and back: the same as a swipe that way.
+    static const int8_t FX[] = {0, -1, 1, 0, 0}, FY[] = {0, 0, 0, -1, 1};
+    static const char *NAMES[] = {"", "left", "right", "up", "down"};
+    if (LOG_SHAKE) Serial.printf("motion: flick %s\n", NAMES[flick]);
+    beginSwipe(int(SCREEN_CX), int(SCREEN_CY), FX[flick] * 60, FY[flick] * 60, now);
+    return;
+  }
+  if (rocking) {
+    // Rocked gently: it feels petted for as long as the rocking goes on.
+    lastActivity = now;
+    if (!creature.sustain(Mood::PETTED, now, 1400)) {
+      if (LOG_SHAKE) Serial.println("motion: rocking");
+      react(Mood::PETTED, now, 1400);
+    }
+    return;
+  }
+  if (ev == ShakeDetector::BUMP && !samplerOn) {
+    // A knock on the resting star (when knocks are not counted on the fast
+    // sampler): the eyes recoil and it looks startled.
     creature.impact(lin[0] * .6f, lin[1] * .6f);
     creature.reactPassive(Mood::SURPRISED, now, 520);
   } else if (jolt > PICKUP_MS2 && stillFor > 15000) {
@@ -336,13 +492,31 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   }
 }
 
+// Knocks on the case, counted by the fast sampler: the same as taps.
+void handleKnocks(uint32_t now) {
+  KnockReport k;
+  while (nextKnock(k)) {
+    if (LOG_SHAKE) Serial.printf("motion: knock %u (push %.1f, %.1f m/s^2)\n", k.count, k.x, k.y);
+    if (sleepPreparing) {
+      if (creature.sleepFinished(now)) startWakeAnimation(now, false, true);
+      else react(Mood::SURPRISED, now, 900);
+      continue;
+    }
+    // A knock from the left pushes the star right: the nearer (left) eye flinches.
+    float side = fabsf(k.x) > fabsf(k.y) * .5f ? (k.x > 0 ? -1.0f : 1.0f) : 0.0f;
+    creature.impact(k.x * .5f, k.y * .5f);
+    tapReaction(min(4, int(k.count)), int(SCREEN_CX + side * SCREEN_MIN_SIDE * .25f), int(SCREEN_CY), now);
+  }
+}
+
 void handleMotion(uint32_t now) {
   if (!imuReady) return;
+  handleKnocks(now);
   static uint32_t lastSample = 0;
   if (now - lastSample < 25) return;
   lastSample = now;
   float a[3], g[3];
-  readMotion(a, g);
+  currentMotion(a, g);
   if (activeTwist.feed(g, now)) {
     creature.impact(linX, linY);
     react(Mood::DIZZY, now, DIZZY_ANIM_MS); // tumbles, then glares
@@ -384,7 +558,8 @@ void handleMotion(uint32_t now) {
       }
     }
   } else candidateSince = 0;
-  // A face-down pause produces a puzzled, asymmetric expression.
+  // A face-down pause produces a puzzled, asymmetric expression; left face
+  // down, it goes to sleep (a way to switch it off without the touch screen).
   static uint32_t faceDownSince = 0;
   static bool faceDownReacted = false;
   if (a[2] < -7.5f && fabsf(g[0]) + fabsf(g[1]) < 1.2f) {
@@ -393,13 +568,65 @@ void handleMotion(uint32_t now) {
       react(Mood::CONFUSED, now, 1000);
       faceDownReacted = true;
     }
+    if (FACE_DOWN_SLEEP_MS && !sleepPreparing && now - faceDownSince > FACE_DOWN_SLEEP_MS) {
+      if (LOG_SHAKE) Serial.println("motion: face down, going to sleep");
+      startSleepAnimation(now);
+    }
   } else {
     faceDownSince = 0;
     faceDownReacted = false;
   }
+  // Held upside down: worried, then cross, then furious, like a finger held
+  // on the screen. Turned back over, it huffs if it got angry, or just looks
+  // puzzled. "Upside down" is relative to how it is usually held (learned
+  // after it has been held upright and steady for a second, then slowly
+  // adapted), so it works whichever way the sensor sits in the enclosure.
+  static bool upside = false, haveUsual = false;
+  static uint32_t upsideCandidate = 0, uprightSince = 0;
+  static float usualX = 0, usualY = 1;
+  float planar = sqrtf(a[0] * a[0] + a[1] * a[1]);  // gravity across the screen
+  float dirX = planar > .1f ? a[0] / planar : 0, dirY = planar > .1f ? a[1] / planar : 0;
+  bool upright = planar > 7.0f && fabsf(g[0]) + fabsf(g[1]) + fabsf(g[2]) < .6f;
+  if (!upside && upright) {
+    if (!haveUsual) {
+      uprightSince = uprightSince ? uprightSince : now;
+      if (now - uprightSince >= 1000) { usualX = dirX; usualY = dirY; haveUsual = true; }
+    } else if (dirX * usualX + dirY * usualY > .5f) {
+      usualX += (dirX - usualX) * .002f;  // drifts toward how it is held (~15 s)
+      usualY += (dirY - usualY) * .002f;
+      float n = sqrtf(usualX * usualX + usualY * usualY);
+      usualX /= n; usualY /= n;
+    }
+  } else if (!haveUsual) {
+    uprightSince = 0;
+  }
+  float facing = dirX * usualX + dirY * usualY;    // 1 as usual, -1 upside down
+  bool upsideNow = haveUsual && planar > 6.5f && facing < -.75f && shaker.strength < 1.5f;
+  if (!upside) {
+    upsideCandidate = upsideNow ? (upsideCandidate ? upsideCandidate : now) : 0;
+    if (upsideCandidate && now - upsideCandidate >= UPSIDE_DOWN_MS && !sleepPreparing) {
+      upside = true;
+      creature.setUpsideDown(true, now);
+      react(Mood::UPSIDE_DOWN, now, 600);
+      if (LOG_SHAKE) Serial.println("motion: upside down");
+    }
+  } else if (planar < 4.0f || facing > -.4f || sleepPreparing) {
+    upside = false;
+    upsideCandidate = 0;
+    float anger = creature.annoyance();
+    creature.setUpsideDown(false, now);
+    if (anger > .35f) creature.huff(anger, now);
+    else if (!sleepPreparing) react(Mood::CONFUSED, now, 700);
+    if (LOG_SHAKE) Serial.printf("motion: turned back over (anger %.2f)\n", anger);
+  } else {
+    lastActivity = now; // being held upside down is an interaction
+  }
   if (now - lastTempRead >= 1000) {
     lastTempRead = now;
-    dieTempC = QMI8658_readTemp();
+    {
+      I2CGuard bus;
+      dieTempC = QMI8658_readTemp();
+    }
     // This is the IMU's die temperature, not a true ambient thermometer.
     if (dieTempC > -30 && dieTempC < 18) {
       if (!coldSince) coldSince = now;
@@ -561,10 +788,13 @@ bool armMotionWake() {
 
 bool enterDeepSleep(bool lcdReady) {
   if (!imuReady) return false;
-  configureTouchWake();
+  stopMotionSampler(); // the IMU is reconfigured below
+  if (TOUCH_ENABLED) configureTouchWake();
   if (!armMotionWake()) {
     Serial.println("WoM setup failed; keeping face awake so shake wake is not lost");
     QMI8658_init();
+    tuneImuFilters();
+    startMotionSampler();
     sleepRetryAt = millis() + 5000;
     return false;
   }
@@ -578,6 +808,8 @@ bool enterDeepSleep(bool lcdReady) {
   }
   if (digitalRead(IMU_WAKE_PIN) == LOW) {
     QMI8658_init();
+    tuneImuFilters();
+    startMotionSampler();
     sleepRetryAt = millis() + 5000;
     return false;
   }
@@ -588,7 +820,8 @@ bool enterDeepSleep(bool lcdReady) {
   gpio_hold_en(GPIO_NUM_2);
   gpio_deep_sleep_hold_en();
   uint64_t pins = 1ULL << IMU_WAKE_PIN;
-  if (digitalRead(TOUCH_WAKE_PIN) == HIGH) pins |= 1ULL << TOUCH_WAKE_PIN;
+  // (A touch line stuck low, e.g. under a cover, would wake it at once: leave it out.)
+  if (TOUCH_ENABLED && !touchStuck && digitalRead(TOUCH_WAKE_PIN) == HIGH) pins |= 1ULL << TOUCH_WAKE_PIN;
   // Keep both wake lines pulled up while asleep so neither floats low (a
   // phantom wake) or can't be pulled low (no wake). Digital pull-ups set by
   // pinMode() switch off in deep sleep; the RTC ones need RTC_PERIPH powered.
@@ -666,12 +899,13 @@ void setup() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   uint64_t source = cause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
   Serial.printf("Wake cause=%d, pins=0x%llX\n", int(cause), source);
-  bool touchWake = (source & (1ULL << TOUCH_WAKE_PIN)) != 0;
+  bool touchWake = TOUCH_ENABLED && (source & (1ULL << TOUCH_WAKE_PIN)) != 0;
   // A touch wakes it straight away (or needs a second press when
   // TOUCH_WAKE_DOUBLE_PRESS is set, to avoid waking in a pocket).
   bool touchConfirmed = touchWake && (!TOUCH_WAKE_DOUBLE_PRESS || confirmTwoPressWake());
   if (cause == ESP_SLEEP_WAKEUP_EXT1) exitMotionWake();
   imuReady = QMI8658_init() != 0;
+  if (imuReady) tuneImuFilters();
   Serial.println(imuReady ? "Motion sensor ready" :
                  "Motion sensor NOT found: shake, tilt and shake-wake are disabled");
   if (touchWake && !touchConfirmed && !(source & (1ULL << IMU_WAKE_PIN))) {
@@ -695,12 +929,16 @@ void setup() {
   DEV_Module_Init();
   DEV_SET_PWM(0);
   LCD_1IN28_Init(HORIZONTAL);
-  touch.begin(FALLING);
-  // The press that woke it may still be on the screen: don't treat it as a
-  // new touch to follow.
-  if (touchConfirmed) finger.ignoreUntilLift(millis());
+  if (TOUCH_ENABLED) {
+    touch.begin(FALLING);
+    // The press that woke it may still be on the screen: don't treat it as a
+    // new touch to follow.
+    if (touchConfirmed) finger.ignoreUntilLift(millis());
+  }
   Wire.setClock(400000);
-  configureTouchWake();
+  if (TOUCH_ENABLED) configureTouchWake();
+  else Serial.println("Touch disabled (TOUCH_ENABLED = false): motion gestures only");
+  startMotionSampler(); // knocks and fast motion, on core 0
   randomSeed(esp_random());
   uint64_t mac = ESP.getEfuseMac();
   uint32_t unitSeed = uint32_t(mac ^ (mac >> 32)); // small per-unit quirks in the idle motion
@@ -725,9 +963,10 @@ void loop() {
   if (!BlackImage) { delay(1000); return; }
   uint32_t now = millis();
   handleTouch(now);
-  if (sleepPreparing && digitalRead(TOUCH_WAKE_PIN) == LOW) cancelSleepForTouch(now);
+  if (TOUCH_ENABLED && !touchStuck && sleepPreparing && digitalRead(TOUCH_WAKE_PIN) == LOW)
+    cancelSleepForTouch(now);
   handleMotion(now);
-  creature.setPointerHeld(finger.tracking(), now);
+  creature.setPointerHeld(finger.tracking() && !touchStuck, now);
   if (now - lastBatteryCheck >= BATTERY_CHECK_MS) {
     lastBatteryCheck = now;
     readBattery();

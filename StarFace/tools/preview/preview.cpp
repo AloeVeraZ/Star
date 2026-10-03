@@ -118,6 +118,12 @@ int main(int argc, char **argv) {
       sim.shot(out + "/sleeping.ppm"); }
     { Sim sim; sim.wake(); sim.c.react(Mood::ANGRY, sim.now, ANGRY_ANIM_MS); sim.run(ANGRY_ANIM_MS + 900);
       sim.shot(out + "/grumpy_after.ppm"); }
+    // Held upside down: worried, then cross, then furious.
+    for (int ms : {800, 2600, 5000}) {
+      Sim sim; sim.wake(); sim.c.setTilt(0, -.9f); sim.c.setUpsideDown(true, sim.now);
+      sim.c.react(Mood::UPSIDE_DOWN, sim.now, 600); sim.run(ms);
+      sim.shot(out + "/upside_down_" + std::to_string(ms) + ".ppm");
+    }
     return finish();
   }
   if (mode == "strip" && argc >= 4) {

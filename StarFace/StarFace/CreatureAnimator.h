@@ -15,7 +15,7 @@ static constexpr uint32_t SLEEP_SEQUENCE_MS = 5400;
 enum class Mood : uint8_t {
   IDLE, HAPPY, SAD, ANGRY, DIZZY, SLEEPY, SURPRISED, ANXIOUS,
   WAKE_UP, BATTERY, BOOP, PETTED, SWIPING, FOLLOWING, CONFUSED, SHY,
-  SHIVER, LOVED
+  SHIVER, LOVED, UPSIDE_DOWN
 };
 
 // The creature's behaviour on top of the eye system: it turns events into
@@ -32,6 +32,8 @@ class CreatureAnimator {
   bool react(Mood m, uint32_t now, uint32_t durationMs, bool direct = true);
   // Self-started behaviour; never overrides an active reaction.
   bool reactPassive(Mood m, uint32_t now, uint32_t durationMs);
+  // Keeps a mood that is already showing going a little longer (true if it was showing).
+  bool sustain(Mood m, uint32_t now, uint32_t durationMs);
   void queue(Mood m, uint32_t at, uint32_t durationMs, int param = 0);
   void showBattery(int percent, uint32_t now);
   // fromShake plays a startled wake into dizziness; touched favors a startled wake.
@@ -48,6 +50,11 @@ class CreatureAnimator {
   void setPointerHeld(bool held, uint32_t now) {
     if (held && !pointerHeld) holdSince = now;
     pointerHeld = held;
+  }
+  // Held upside down: the same slow build-up of anger as a finger held on it.
+  void setUpsideDown(bool upside, uint32_t now) {
+    if (upside && !upsideDown) upsideSince = now;
+    upsideDown = upside;
   }
   float annoyance() const { return holdAnnoy; }  // 0 calm .. 1 furious, from holding
   // Let go after being held: a huff proportional to how annoyed it got, then
@@ -101,7 +108,8 @@ class CreatureAnimator {
   float tiltX = 0, tiltY = 0;
   float pointerX = 0, pointerY = 0;
   uint32_t pointerAt = 0, holdSince = 0;
-  bool pointerHeld = false;
+  bool pointerHeld = false, upsideDown = false;
+  uint32_t upsideSince = 0;
   float holdAnnoy = 0;
   float angerResidue = 1, grumpy = 0;
   int touchX = 120, touchY = 120, swipeX = 0, swipeY = 0;

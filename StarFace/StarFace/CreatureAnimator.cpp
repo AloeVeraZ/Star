@@ -77,7 +77,7 @@ uint8_t priorityOf(Mood m) {
     case Mood::DIZZY: return 6;
     case Mood::SURPRISED: return 5;
     case Mood::ANGRY: case Mood::BOOP: case Mood::ANXIOUS: case Mood::SWIPING: case Mood::FOLLOWING:
-    case Mood::PETTED: case Mood::BATTERY: case Mood::LOVED: return 4;
+    case Mood::PETTED: case Mood::BATTERY: case Mood::LOVED: case Mood::UPSIDE_DOWN: return 4;
     case Mood::HAPPY: case Mood::SAD: case Mood::SHY: case Mood::CONFUSED: return 3;
     case Mood::SHIVER: case Mood::WAKE_UP: return 2;
     case Mood::SLEEPY: return 1;
@@ -131,6 +131,12 @@ void CreatureAnimator::huff(float amount, uint32_t now) {
 bool CreatureAnimator::reactPassive(Mood m, uint32_t now, uint32_t durationMs) {
   if (activeAt(now)) return false;
   enterMood(m, now, durationMs, frand(.6f, .85f)); // self-started moods are subtler
+  return true;
+}
+
+bool CreatureAnimator::sustain(Mood m, uint32_t now, uint32_t durationMs) {
+  if (current != m || !activeAt(now)) return false;
+  if (int32_t(moodUntil - (now + durationMs)) < 0) moodUntil = now + durationMs;
   return true;
 }
 
@@ -285,9 +291,13 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
   }
   // Following a finger lasts as long as the finger stays down.
   if (current == Mood::FOLLOWING && pointerHeld && int32_t(moodUntil - now) < 250) moodUntil = now + 250;
-  holdAnnoy = pointerHeld ? smoothstep(float(HOLD_ANGER_START_MS), float(HOLD_ANGER_FULL_MS),
-                                       float(now - holdSince))
-                          : 0.0f;
+  if (current == Mood::UPSIDE_DOWN && upsideDown && int32_t(moodUntil - now) < 250) moodUntil = now + 250;
+  // Held on by a finger, or held upside down: annoyance builds the longer it lasts.
+  auto build = [](uint32_t heldMs) {
+    return smoothstep(float(HOLD_ANGER_START_MS), float(HOLD_ANGER_FULL_MS), float(heldMs));
+  };
+  holdAnnoy = fmaxf(pointerHeld ? build(now - holdSince) : 0.0f,
+                    upsideDown ? build(now - upsideSince) : 0.0f);
   if (current != Mood::IDLE && current != Mood::SLEEPY && int32_t(now - moodUntil) >= 0) {
     if (current == Mood::BATTERY && batteryReturnRemaining) {
       uint32_t remaining = batteryReturnRemaining;
@@ -377,6 +387,10 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
       e = NEUTRAL; b = ANGRY; t = holdAnnoy; k = 1;
       break;
     case Mood::CONFUSED: e = CONFUSED; break;
+    case Mood::UPSIDE_DOWN:
+      // Worried at first, then cross, then furious (it trembles in updateEffects).
+      e = WORRIED; b = ANGRY; t = holdAnnoy; k = 1;
+      break;
     case Mood::SHY: e = WORRIED; k *= .7f; open[0] = .62f; open[1] = .52f; break;
     case Mood::SHIVER: e = SQUINT; k *= .8f; break;
     case Mood::BATTERY: {
@@ -616,7 +630,7 @@ void CreatureAnimator::updateEffects(float dt) {
     }
   }
   // Held on for too long: it trembles with rage.
-  if (current == Mood::FOLLOWING && holdAnnoy > .6f) {
+  if ((current == Mood::FOLLOWING || current == Mood::UPSIDE_DOWN) && holdAnnoy > .6f) {
     float a = (holdAnnoy - .6f) / .4f;
     for (int i = 0; i < 2; ++i) {
       ex[i] += 1.8f * a * noise1(clock * 17.0f + i * 2.3f, seed + 101 + i);

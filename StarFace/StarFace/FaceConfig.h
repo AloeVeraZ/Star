@@ -76,6 +76,28 @@ static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
 
+// ---- Motion gestures (everything also works without the touch screen) -------
+// Knock on the case 1/2/3/4 times = tap the screen 1/2/3/4 times; tip it one
+// way and straight back = swipe that way; rock it gently = pet it; hold it
+// upside down = hold a finger on it (it gets angrier the longer it lasts);
+// lay it face down = put it to sleep.
+static constexpr float KNOCK_MS2 = 3.0f;          // a knock is a jolt at least this sharp (lower = more sensitive)
+static constexpr float KNOCK_QUIET_MS2 = 1.5f;    // ...on a star moving less than this just before
+static constexpr uint32_t KNOCK_QUIET_BEFORE_MS = 250; // ...for this long (walking never is)
+static constexpr float KNOCK_MAX_SPIN_RAD_S = 1.5f; // a swing is not a knock
+static constexpr uint32_t KNOCK_RING_MS = 110;    // a knock must settle within this
+static constexpr uint32_t KNOCK_GAP_MS = 450;     // longest pause between knocks of one run
+static constexpr float FLICK_START_RAD_S = 2.0f;  // a flick starts with a turn at least this quick...
+static constexpr float FLICK_MIN_TILT_MS2 = 3.3f; // ...tips it at least ~20 degrees...
+static constexpr float FLICK_RETURN_MS2 = 2.0f;   // ...and comes back to within ~12 degrees...
+static constexpr uint32_t FLICK_MAX_MS = 800;     // ...within this time
+static constexpr uint32_t ROCK_MIN_HALF_MS = 360; // one rocking swing takes this long or more
+static constexpr uint32_t ROCK_MAX_HALF_MS = 1400;
+static constexpr uint8_t ROCK_SWINGS = 3;         // swings in a row before it feels petted
+static constexpr float ROCK_MAX_BOUNCE_MS2 = 1.6f; // jostling above this (walking) is not rocking
+static constexpr uint32_t UPSIDE_DOWN_MS = 500;   // held upside down this long annoys it
+static constexpr uint32_t FACE_DOWN_SLEEP_MS = 4000; // face down this long: it goes to sleep (0 = never)
+
 // ---- Touch -------------------------------------------------------------------------
 // While a finger is down the eyes follow it. Releasing after a quick flick is
 // a swipe in the flick's direction; holding on makes it more and more angry.
@@ -87,6 +109,12 @@ static constexpr uint32_t SWIPE_MAX_SHORT_MS = 700; // or: a press this short th
 static constexpr uint32_t HOLD_ANGER_START_MS = 1200; // holding longer than this annoys it...
 static constexpr uint32_t HOLD_ANGER_FULL_MS = 4500;  // ...and by this long it is furious
 static constexpr uint32_t TOUCH_RELEASE_TIMEOUT_MS = 250; // no report this long = finger lifted
+// Set TOUCH_ENABLED = false if the screen sits behind a cover that blocks
+// touch: the touch chip is then ignored and only motion wakes it from sleep.
+static constexpr bool TOUCH_ENABLED = true;
+// A "finger" that never lifts (a cover pressing on the glass, moisture) is
+// ignored after this long, so it cannot keep the creature angry or awake.
+static constexpr uint32_t TOUCH_STUCK_MS = 15000;
 
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to

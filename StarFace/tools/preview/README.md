@@ -13,7 +13,7 @@ python3 sheet.py out.png frames/*.ppm --cols 4   # contact sheet, cropped to the
 python3 make_previews.py frames                  # refresh the images used in the main README
 ```
 
-`./run_tests.sh` runs three checks on the same sources: `touch_test` plays
+`./run_tests.sh` runs four checks on the same sources: `motion_test` plays knocks (simulated at the sensor's real 1 kHz rate and filter), tilt flicks, rocking and twists through the touch-free gestures, against walking, running and shaking; `touch_test` plays
 touch-controller report streams (taps, flicks, long holds that wander, lost
 lift reports) through the sketch's finger tracker; `shake_test` feeds
 simulated shakes, wrist flicks, walking, running and knocks through the

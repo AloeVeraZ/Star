@@ -81,15 +81,16 @@ static constexpr uint32_t TWIST_MAX_PAUSE_MS = 600;
 static constexpr float TWIST_RATE_RAD_S = 1.2f;        // about 69 degrees/s on X or Y
 static constexpr float TWIST_MIN_HALF_TURN_RAD = .25f; // about 14 degrees each way
 static constexpr uint8_t TWIST_REVERSALS_TO_WAKE = 3;
+static constexpr uint32_t TWIST_MAX_HALF_MS = 330;     // slower swings are rocking (petting), not twisting
 
 struct TwistAxis {
-  uint32_t startedAt = 0, lastMoveAt = 0;
+  uint32_t startedAt = 0, lastMoveAt = 0, halfAt = 0;
   float halfTurn = 0;
   int8_t direction = 0;
   uint8_t reversals = 0;
 
   void reset() {
-    startedAt = lastMoveAt = 0;
+    startedAt = lastMoveAt = halfAt = 0;
     halfTurn = 0;
     direction = 0;
     reversals = 0;
@@ -102,17 +103,19 @@ struct TwistAxis {
     int8_t nextDirection = rate > 0 ? 1 : -1;
     float step = fabsf(rate) * (dt < 60 ? dt : 60) / 1000.0f;
     if (!startedAt) {
-      startedAt = now;
+      startedAt = halfAt = now;
       direction = nextDirection;
       halfTurn = step;
     } else if (direction == nextDirection) {
       halfTurn += step;
     } else {
-      // A reversal only counts after a real angular sweep, not gyro noise.
-      if (halfTurn >= TWIST_MIN_HALF_TURN_RAD) ++reversals;
+      // A reversal only counts after a real, quick angular sweep (not gyro
+      // noise, and not a slow rocking swing).
+      if (halfTurn >= TWIST_MIN_HALF_TURN_RAD && now - halfAt <= TWIST_MAX_HALF_MS) ++reversals;
       else reversals = 0;
       direction = nextDirection;
       halfTurn = step;
+      halfAt = now;
     }
     lastMoveAt = now;
     if (reversals >= TWIST_REVERSALS_TO_WAKE &&

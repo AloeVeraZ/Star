@@ -23,17 +23,17 @@ int main() {
   uint32_t now = 0, moodSince = 0;
   Mood lastMood = Mood::IDLE;
   const Mood moods[] = {Mood::HAPPY, Mood::SAD, Mood::ANGRY, Mood::DIZZY, Mood::SURPRISED, Mood::ANXIOUS, Mood::BOOP, Mood::PETTED,
-                        Mood::SWIPING, Mood::FOLLOWING, Mood::CONFUSED, Mood::SHY, Mood::SHIVER, Mood::LOVED};
+                        Mood::SWIPING, Mood::FOLLOWING, Mood::CONFUSED, Mood::SHY, Mood::SHIVER, Mood::LOVED, Mood::UPSIDE_DOWN};
   long frames = 0;
-  bool held = false;
+  bool held = false, upside = false;
   for (; now < 3u * 3600u * 1000u; now += 16 + (esp_random() % 30)) { // ~3 h, 20-50 FPS
     float dt = 0;
     static uint32_t prev = 0;
     dt = (now - prev) / 1000.0f;
     prev = now;
     uint32_t r100 = esp_random() % 1000;
-    if (r100 < 4) c.react(moods[esp_random() % 14], now, 400 + esp_random() % 2500);
-    else if (r100 < 6) c.reactPassive(moods[esp_random() % 14], now, 600);
+    if (r100 < 4) c.react(moods[esp_random() % 15], now, 400 + esp_random() % 2500);
+    else if (r100 < 6) c.reactPassive(moods[esp_random() % 15], now, 600);
     else if (r100 < 7) { c.impact((esp_random() % 41) - 20.0f, (esp_random() % 41) - 20.0f); c.react(Mood::DIZZY, now, DIZZY_ANIM_MS); }
     else if (r100 < 9) c.shake((esp_random() % 130) / 100.0f);
     else if (r100 < 10) c.startSleep(now, (esp_random() & 1) ? 0.0f : .3f);
@@ -46,6 +46,13 @@ int main() {
                           c.setTouchPoint(esp_random() % 240, esp_random() % 240); }
     if (esp_random() % 120 == 0) held = !held;          // holds of a few seconds
     c.setPointerHeld(held, now);
+    if (esp_random() % 150 == 0) {                       // held upside down for a while
+      upside = !upside;
+      c.setUpsideDown(upside, now);
+      if (upside) c.react(Mood::UPSIDE_DOWN, now, 600);
+      else if (c.annoyance() > .35f) c.huff(c.annoyance(), now);
+    }
+    if (esp_random() % 200 == 0) c.sustain(Mood::PETTED, now, 1400); // rocking
     if (held && esp_random() % 400 == 0) c.huff(c.annoyance(), now);
     c.setTilt(sinf(now * .0007f), cosf(now * .0011f));
     c.applyInertia((esp_random() % 21) - 10.0f, (esp_random() % 21) - 10.0f);
@@ -67,7 +74,8 @@ int main() {
     CHECK(c.backlight() >= 0 && c.backlight() <= 1.0001f, "t=%u backlight %.2f", now, c.backlight());
     // Every mood but sleep must end (the longest scripted one is a few seconds);
     // following a finger lasts while the finger is held, then must end too.
-    if (c.mood() != lastMood || (c.mood() == Mood::FOLLOWING && held)) { lastMood = c.mood(); moodSince = now; }
+    if (c.mood() != lastMood || (c.mood() == Mood::FOLLOWING && held) ||
+        (c.mood() == Mood::UPSIDE_DOWN && upside)) { lastMood = c.mood(); moodSince = now; }
     CHECK(c.mood() == Mood::IDLE || c.mood() == Mood::SLEEPY || now - moodSince < 12000,
           "t=%u mood %d stuck for %u ms", now, int(c.mood()), now - moodSince);
     if (frames % 7 == 0) { // render a sample of frames (sanitizers check every pixel write)

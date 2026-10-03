@@ -12,6 +12,7 @@
 #include "FaceConfig.h"
 #include "EyeRenderer.h"
 #include "CreatureAnimator.h"
+#include "ShakeDetector.h"
 
 // Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round).
 // Hardware, input and power live here; all eye animation is in CreatureAnimator,
@@ -37,11 +38,6 @@ static constexpr int LOW_BATTERY_PERCENT = 3;    // a nap at or below this becom
 static constexpr uint32_t BATTERY_CHECK_MS = 60000;
 
 static constexpr uint32_t TOUCH_TWO_PRESS_MS = 3000;
-static constexpr uint32_t TWIST_WINDOW_MS = 3000;
-static constexpr uint32_t TWIST_MAX_PAUSE_MS = 600;
-static constexpr float TWIST_RATE_RAD_S = 1.2f; // about 69 degrees/s on X or Y
-static constexpr float TWIST_MIN_HALF_TURN_RAD = .25f; // about 14 degrees each way
-static constexpr uint8_t TWIST_REVERSALS_TO_WAKE = 3;
 static constexpr uint8_t WOM_THRESHOLD_MG = 90; // coarse low-power alert; gyro verifies the twist
 static constexpr float TILT_ACTIVITY_DELTA = .55f; // held orientation change, not a walking jostle
 static constexpr uint32_t TILT_ACTIVITY_HOLD_MS = 300;
@@ -64,65 +60,6 @@ int batteryPercent = -1;
 uint32_t lastTempRead = 0, coldSince = 0, lastColdReaction = 0;
 Preferences prefs;
 
-struct TwistAxis {
-  uint32_t startedAt = 0, lastMoveAt = 0;
-  float halfTurn = 0;
-  int8_t direction = 0;
-  uint8_t reversals = 0;
-
-  void reset() {
-    startedAt = lastMoveAt = 0;
-    halfTurn = 0;
-    direction = 0;
-    reversals = 0;
-  }
-
-  bool feed(float rate, uint32_t now, uint32_t dt) {
-    if (startedAt && (now - lastMoveAt > TWIST_MAX_PAUSE_MS ||
-                      now - startedAt > TWIST_WINDOW_MS)) reset();
-    if (fabsf(rate) < TWIST_RATE_RAD_S) return false;
-    int8_t nextDirection = rate > 0 ? 1 : -1;
-    float step = fabsf(rate) * min(uint32_t(60), dt) / 1000.0f;
-    if (!startedAt) {
-      startedAt = now;
-      direction = nextDirection;
-      halfTurn = step;
-    } else if (direction == nextDirection) {
-      halfTurn += step;
-    } else {
-      // A reversal only counts after a real angular sweep, not gyro noise.
-      if (halfTurn >= TWIST_MIN_HALF_TURN_RAD) ++reversals;
-      else reversals = 0;
-      direction = nextDirection;
-      halfTurn = step;
-    }
-    lastMoveAt = now;
-    if (reversals >= TWIST_REVERSALS_TO_WAKE &&
-        halfTurn >= TWIST_MIN_HALF_TURN_RAD) {
-      reset();
-      return true;
-    }
-    return false;
-  }
-};
-
-struct TwistDetector {
-  TwistAxis axis[2]; // board X and Y run parallel to the screen
-  uint32_t lastSampleAt = 0;
-
-  bool feed(const float gyro[3], uint32_t now) {
-    uint32_t dt = lastSampleAt ? now - lastSampleAt : 25;
-    lastSampleAt = now;
-    bool x = axis[0].feed(gyro[0], now, dt);
-    bool y = axis[1].feed(gyro[1], now, dt);
-    return x || y;
-  }
-
-  bool active() const { return axis[0].startedAt || axis[1].startedAt; }
-  bool progressing() const {
-    return axis[0].reversals >= 2 || axis[1].reversals >= 2;
-  }
-};
 TwistDetector activeTwist;
 
 void chooseLook(uint8_t look, uint8_t color, bool save, bool instant) {
@@ -370,65 +307,31 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   }
 
   // ---- Shaking while awake ----
-  // How hard it is being shaken (a short running average) drives a live
-  // rattle in the eyes, so they react from the very first stroke. Strong
-  // strokes that reverse direction count toward the dizzy spell; each one also
-  // throws the eyes the other way, so they slosh with the motion.
-  static uint32_t lastSampleAt = 0, lastStrokeAt = 0, lastBumpAt = 0, strongSince = 0, lastLogAt = 0;
-  static uint8_t strokes = 0;
-  static float strokeDir[3] = {0, 0, 0};
-  static float shakeStrength = 0;
-  float dt = lastSampleAt ? min(uint32_t(100), now - lastSampleAt) / 1000.0f : .025f;
-  lastSampleAt = now;
-  // A wrist shake is partly rotation, so a fast spin counts as shaking too.
+  // How hard it is being shaken drives a live rattle in the eyes from the very
+  // first stroke; each stroke throws the eyes the other way; a real shake
+  // (see ShakeDetector) makes it dizzy, then angry, then it calms down.
+  static ShakeDetector shaker;
+  static uint32_t lastBumpAt = 0, lastLogAt = 0;
   float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
-  float excess = fmaxf(fmaxf(0.0f, jolt - SHAKE_NOISE_MS2), (spin - SHAKE_GYRO_RAD_S) * 2.5f);
-  shakeStrength += (excess - shakeStrength) * (1.0f - expf(-dt / .35f));
-  if (shakeStrength > SHAKE_NOISE_MS2 * .5f)
-    creature.shake(shakeStrength / SHAKE_FULL_MS2);
-  if (LOG_SHAKE && shakeStrength > 1.0f && now - lastLogAt > 200) {
+  ShakeDetector::Event ev = shaker.feed(lin, spin, now);
+  if (shaker.rattle() > 0) creature.shake(shaker.rattle());
+  if (LOG_SHAKE && shaker.strength > 1.0f && now - lastLogAt > 200) {
     lastLogAt = now;
     Serial.printf("shake: strength %.1f (dizzy at %.1f)  jolt %.1f m/s^2  spin %.1f rad/s  strokes %u\n",
-                  shakeStrength, SHAKE_DIZZY_STRENGTH, jolt, spin, strokes);
+                  shaker.strength, SHAKE_DIZZY_STRENGTH, jolt, spin, shaker.strokes);
   }
-  // Sustained hard shaking makes it dizzy even if the strokes are irregular.
-  strongSince = shakeStrength > SHAKE_DIZZY_STRENGTH ? (strongSince ? strongSince : now) : 0;
-  if (strongSince && now - strongSince >= SHAKE_DIZZY_HOLD_MS) {
-    strongSince = 0;
-    strokes = 0;
-    lastActivity = now;
-    sleepPreparing = false;
-    creature.impact(lin[0], lin[1]);
-    if (react(DIZZY, now, DIZZY_ANIM_MS) && LOG_SHAKE) Serial.println("shake: DIZZY (sustained)");
-    return;
-  }
-
-  if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
-  bool stroke = false;
-  if (jolt > SHAKE_STROKE_MS2 && now - lastStrokeAt > 60) {
-    float dot = lin[0] * strokeDir[0] + lin[1] * strokeDir[1] + lin[2] * strokeDir[2];
-    if (strokes == 0 || dot < 0) {
-      ++strokes;
-      for (int i = 0; i < 3; ++i) strokeDir[i] = lin[i];
-      lastStrokeAt = now;
-      stroke = true;
-      if (LOG_SHAKE) Serial.printf("shake stroke %u: %.1f m/s^2\n", strokes, jolt);
-    }
-  }
-  if (stroke) {
+  if (ev != ShakeDetector::NONE) {
     lastActivity = now; // being shaken is an interaction
     sleepPreparing = false;
-    creature.impact(lin[0] * .6f, lin[1] * .6f);
-    if (strokes >= SHAKE_STROKES_FOR_DIZZY) {
-      // The full reaction: wobble, dizzy spiral eyes, glare, calm down. Keep
-      // shaking and it starts spinning again.
-      strokes = 0;
-      strongSince = 0;
+    if (ev == ShakeDetector::DIZZY) {
+      // Wobble, spiral eyes, glare, calm down. Keep shaking: it spins again.
       creature.impact(lin[0], lin[1]);
-      if (react(DIZZY, now, DIZZY_ANIM_MS) && LOG_SHAKE) Serial.println("shake: DIZZY (strokes)");
+      bool started = react(DIZZY, now, DIZZY_ANIM_MS);
+      if (LOG_SHAKE) Serial.println(started ? "shake: DIZZY" : "shake: (already dizzy)");
       return;
     }
-    if (strokes == 1 && creature.mood() != DIZZY && creature.mood() != ANGRY)
+    creature.impact(lin[0] * .6f, lin[1] * .6f);
+    if (ev == ShakeDetector::FIRST_STROKE && creature.mood() != DIZZY && creature.mood() != ANGRY)
       react(SURPRISED, now, 650); // whoa! -- the first stroke startles it
     return;
   }
@@ -611,6 +514,7 @@ void exitMotionWake() {
     if (rawImuRead(QMI8658Register_StatusInt) & 0x80) break;
     delay(2);
   }
+  rawImuWrite(QMI8658Register_Ctrl9, 0x00); // acknowledge the command
 }
 
 bool armMotionWake() {
@@ -646,7 +550,21 @@ bool armMotionWake() {
                   lastStatus, ctrl2, ctrl7, ctrl8, ctrl9, calL, calH);
     return false;
   }
+  // Acknowledge the command so the next one is accepted (CTRL_CMD_ACK).
+  QMI8658_write_reg(QMI8658Register_Ctrl9, 0x00);
+  for (int i = 0; i < 30; ++i) {
+    uint8_t st = 0;
+    QMI8658_read_reg(QMI8658Register_StatusInt, &st, 1);
+    if (!(st & 0x80)) break;
+    delay(1);
+  }
   QMI8658_enableSensors(QMI8658_CTRL7_ACC_ENABLE);
+  // The QMI8658A keeps its INT pins high-impedance until CTRL1 bit 4 (INT2)
+  // is set; without this the motion alarm never reaches GPIO3, so shaking
+  // could not wake the board. (The Waveshare init writes CTRL1 = 0x60.)
+  uint8_t ctrl1 = 0;
+  QMI8658_read_reg(QMI8658Register_Ctrl1, &ctrl1, 1);
+  QMI8658_write_reg(QMI8658Register_Ctrl1, ctrl1 | 0x10);
   uint8_t status = 0;
   QMI8658_read_reg(QMI8658Register_Status1, &status, 1); // clear stale WoM event
   return true;
@@ -682,6 +600,14 @@ bool enterDeepSleep(bool lcdReady) {
   gpio_deep_sleep_hold_en();
   uint64_t pins = 1ULL << IMU_WAKE_PIN;
   if (digitalRead(TOUCH_WAKE_PIN) == HIGH) pins |= 1ULL << TOUCH_WAKE_PIN;
+  // Keep both wake lines pulled up while asleep so neither floats low (a
+  // phantom wake) or can't be pulled low (no wake). Digital pull-ups set by
+  // pinMode() switch off in deep sleep; the RTC ones need RTC_PERIPH powered.
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  for (gpio_num_t pin : {gpio_num_t(IMU_WAKE_PIN), gpio_num_t(TOUCH_WAKE_PIN)}) {
+    rtc_gpio_pullup_en(pin);
+    rtc_gpio_pulldown_dis(pin);
+  }
   esp_sleep_enable_ext1_wakeup(pins, ESP_EXT1_WAKEUP_ANY_LOW);
   Serial.println("Entering deep sleep");
   Serial.flush();
@@ -690,37 +616,25 @@ bool enterDeepSleep(bool lcdReady) {
 }
 
 // After the IMU's coarse motion alarm woke the CPU (screen still dark): turn
-// the face on for a shake -- a couple of strong jolts or fast flicks within a
-// few seconds -- or a back-and-forth twist. Gravity's direction is unknown
-// mid-shake, so a jolt is how far the total acceleration strays from 1 g.
-// A walking step is too gentle and goes back to sleep.
+// the face on for a shake (see ShakeWakeCheck) or a back-and-forth twist.
+// Anything gentler, like a walking step, goes straight back to sleep.
 bool confirmMotionWake() {
   const uint32_t window = 2500;
-  uint32_t began = millis(), lastJoltAt = 0;
-  TwistDetector detector;
-  uint8_t jolts = 0;
-  bool armed = true; // a jolt counts on its rising edge only
+  uint32_t began = millis();
+  TwistDetector twist;
+  ShakeWakeCheck shake;
   while (millis() - began < window) {
     float a[3], g[3];
     readMotion(a, g);
     uint32_t now = millis();
-    if (detector.feed(g, now)) return true;
-    float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-    float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
-    bool strong = fabsf(mag - 9.81f) > SHAKE_WAKE_MS2 || spin > SHAKE_GYRO_RAD_S * 1.5f;
-    if (strong && armed && now - lastJoltAt > 80) {
-      armed = false;
-      lastJoltAt = now;
-      ++jolts;
-      if (LOG_SHAKE) Serial.printf("wake jolt %u: %.1f m/s^2 off 1 g, spin %.1f rad/s\n",
-                                   jolts, fabsf(mag - 9.81f), spin);
-      if (jolts >= SHAKE_STROKES_TO_WAKE) return true;
-    } else if (!strong) {
-      armed = true;
-    }
+    uint8_t before = shake.jolts;
+    bool woke = shake.feed(a, g, now) || twist.feed(g, now);
+    if (LOG_SHAKE && shake.jolts != before)
+      Serial.printf("wake stroke %u: %.1f m/s^2\n", shake.jolts, shake.lastJolt);
+    if (woke) return true;
     delay(10);
   }
-  if (LOG_SHAKE) Serial.printf("wake check: %u strong jolt(s), not enough\n", jolts);
+  if (LOG_SHAKE) Serial.printf("wake check: %u shake stroke(s), not enough\n", shake.jolts);
   return false;
 }
 
@@ -750,6 +664,10 @@ void setup() {
   Serial.begin(115200);
   gpio_deep_sleep_hold_dis();
   gpio_hold_dis(GPIO_NUM_2);
+  // Pins that woke the chip stay in RTC mode until released; GPIO5 must be a
+  // normal GPIO again for the touch interrupt.
+  rtc_gpio_deinit(gpio_num_t(IMU_WAKE_PIN));
+  rtc_gpio_deinit(gpio_num_t(TOUCH_WAKE_PIN));
   pinMode(LCD_BL_PIN, OUTPUT);
   digitalWrite(LCD_BL_PIN, LOW);
 

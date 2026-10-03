@@ -1,0 +1,133 @@
+// Feeds simulated accelerometer/gyro data through the sketch's real shake
+// detector (StarFace/ShakeDetector.h) at the slow, jittery sample rates the
+// render loop allows, and checks that shakes trigger and walking does not.
+//   g++ -std=gnu++17 -I../../StarFace shake_test.cpp -o shake_test && ./shake_test
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <initializer_list>
+#include "ShakeDetector.h"
+
+static uint32_t rng = 12345;
+static float frand() { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; }
+
+struct Motion {            // acceleration (m/s^2, incl. gravity) and spin (rad/s) at time t
+  virtual void at(float t, float a[3], float g[3]) = 0;
+};
+struct Shake : Motion {    // back-and-forth along a direction, starting at t = 0.3 s
+  float amp, freq, spinAmp;
+  Shake(float A, float f, float s = 0) : amp(A), freq(f), spinAmp(s) {}
+  void at(float t, float a[3], float g[3]) override {
+    float on = t > .3f ? 1.0f : 0.0f, w = 6.2831853f * freq * t;
+    a[0] = 1.5f + on * amp * sinf(w) * .9f;
+    a[1] = 2.0f + on * amp * sinf(w) * .4f;
+    a[2] = 9.4f + on * amp * .15f * sinf(2 * w) + (frand() - .5f) * .6f;
+    g[0] = on * spinAmp * cosf(w); g[1] = g[2] = 0;
+  }
+};
+struct Walk : Motion {     // steps: vertical bounce plus sway, with noise
+  float bounce, rate;
+  Walk(float b, float r) : bounce(b), rate(r) {}
+  void at(float t, float a[3], float g[3]) override {
+    float w = 6.2831853f * rate * t;
+    a[0] = 1.0f + 1.6f * sinf(w * .5f) + (frand() - .5f);
+    a[1] = .5f + .8f * sinf(w + 1) + (frand() - .5f);
+    a[2] = 9.81f + bounce * fmaxf(0.0f, sinf(w)) * 1.6f - bounce * .5f + (frand() - .5f);
+    g[0] = .6f * sinf(w * .5f); g[1] = .4f * sinf(w); g[2] = 0;
+  }
+};
+struct Knock : Motion {    // one sharp hit at t = 1 s with a short ring-down
+  void at(float t, float a[3], float g[3]) override {
+    float d = t - 1.0f, k = d > 0 && d < .25f ? 22.0f * expf(-d / .03f) * cosf(6.2831853f * 25 * d) : 0;
+    a[0] = 1.0f + k; a[1] = .5f; a[2] = 9.7f + (frand() - .5f) * .4f;
+    g[0] = g[1] = g[2] = 0;
+  }
+};
+
+// Mirrors handleMotion()/handleSurroundings(): sample, gravity low-pass, detect.
+// Returns ms until DIZZY (or -1) and counts strokes.
+static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
+  ShakeDetector det;
+  TwistDetector twist; // the sketch runs both; either one makes it dizzy
+  float grav[3] = {1.5f, 2.0f, 9.4f};
+  *strokesSeen = 0;
+  for (float tms = 0; tms < seconds * 1000; tms += periodMs * (.7f + .6f * frand())) {
+    float a[3], g[3];
+    m.at(tms / 1000, a, g);
+    float lin[3];
+    for (int i = 0; i < 3; ++i) { grav[i] += (a[i] - grav[i]) * .08f; lin[i] = a[i] - grav[i]; }
+    float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    ShakeDetector::Event ev = det.feed(lin, spin, uint32_t(tms) + 1);
+    if (ev == ShakeDetector::FIRST_STROKE || ev == ShakeDetector::STROKE) ++*strokesSeen;
+    if (ev == ShakeDetector::DIZZY || twist.feed(g, uint32_t(tms) + 1)) return int(tms);
+  }
+  return -1;
+}
+
+// Mirrors confirmMotionWake(): samples every ~12 ms for 2.5 s after boot.
+static int runWake(Motion &m, float bootDelay) {
+  ShakeWakeCheck chk;
+  TwistDetector twist;
+  for (float tms = 0; tms < 2500; tms += 12) {
+    float a[3], g[3];
+    m.at(bootDelay + tms / 1000, a, g);
+    bool shake = chk.feed(a, g, uint32_t(tms) + 1);
+    if (shake || twist.feed(g, uint32_t(tms) + 1)) return int(tms);
+  }
+  return -1;
+}
+
+int main() {
+  int fails = 0;
+  printf("Awake: ms until DIZZY for a shake (amplitude m/s^2 x frequency), by loop sample period\n");
+  printf("  amp  freq |  25ms  45ms  70ms\n");
+  const float amps[] = {6, 9, 12, 18, 30}, freqs[] = {2.5f, 4, 6};
+  for (float A : amps) for (float f : freqs) {
+    printf("  %4.0f %4.1f |", A, f);
+    for (int p : {25, 45, 70}) {
+      int s; int ms = runAwake(*new Shake(A, f), p, 3.0f, &s);
+      printf(" %5d", ms);
+      // A firm shake (>= ~1.2 g) must make it dizzy within 2.5 s at any rate.
+      if (A >= 12 && (ms < 0 || ms > 2500)) { ++fails; printf("!"); }
+    }
+    printf("\n");
+  }
+  int s, ms;
+  for (int p : {25, 45, 70}) {
+    ms = runAwake(*new Shake(4, 4, 6.0f), p, 3.0f, &s);
+    printf("Wrist flick (mostly rotation, 6 rad/s), %d ms loop: dizzy at %d ms\n", p, ms);
+    if (ms < 0) ++fails;
+  }
+  ms = runWake(*new Shake(4, 4, 6.0f), .7f);
+  printf("Wrist flick from sleep: %s\n", ms < 0 ? "stays asleep  <-- MISSED" : "turns on");
+  if (ms < 0) ++fails;
+  struct { const char *name; Motion *m; } calm[] = {
+    {"walking", new Walk(3.0f, 1.8f)}, {"brisk walking", new Walk(4.5f, 2.2f)},
+    {"running", new Walk(8.0f, 2.8f)}, {"single knock", new Knock()},
+  };
+  for (auto &c : calm) {
+    ms = runAwake(*c.m, 40, 20.0f, &s);
+    bool bad = ms >= 0 && c.m && (c.name[0] != 'r');
+    printf("%-14s: dizzy %s, %d stroke(s) in 20 s%s\n", c.name, ms < 0 ? "never" : "TRIGGERED",
+           s, bad ? "  <-- FALSE TRIGGER" : "");
+    if (bad) ++fails;
+  }
+
+  printf("\nWake from sleep: ms after boot until the face turns on (boot finishes 0.4 s into the shake)\n");
+  for (float A : amps) for (float f : {3.0f, 5.0f}) {
+    ms = runWake(*new Shake(A, f), .7f);
+    printf("  shake %4.0f m/s^2 at %.0f Hz: %s", A, f, ms < 0 ? "stays asleep" : "");
+    if (ms >= 0) printf("on after %d ms", ms);
+    if (A >= 12 && ms < 0) { ++fails; printf("  <-- MISSED"); }
+    printf("\n");
+  }
+  for (auto &c : calm) {
+    ms = runWake(*c.m, c.name[0] == 's' ? .95f : 1.0f);
+    bool bad = ms >= 0;
+    printf("  %-13s: %s%s\n", c.name, ms < 0 ? "stays asleep" : "turns on",
+           bad ? "  <-- FALSE WAKE" : "");
+    if (bad) ++fails;
+  }
+  printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASSED", fails, fails == 1 ? "" : "s");
+  return fails ? 1 : 0;
+}

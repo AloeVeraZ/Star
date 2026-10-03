@@ -13,6 +13,13 @@ python3 sheet.py out.png frames/*.ppm --cols 4   # contact sheet, cropped to the
 python3 make_previews.py frames                  # refresh the images used in the main README
 ```
 
+`./run_tests.sh` runs two checks on the same sources: `shake_test` feeds
+simulated shakes, wrist flicks, walking, running and knocks through the
+sketch's shake and twist detectors (awake, and the wake-from-sleep check) at
+the slow sample rates the render loop allows; `soak_test` drives the animator
+and renderer with hours of random input under address and undefined-behaviour
+sanitizers.
+
 Frames are 240 x 240 and show exactly what the panel receives (RGB565, dithered).
 Timing on a PC says nothing about ESP32 speed; set `LOG_FPS` in `StarFace.ino`
 to measure frame rate on the board.

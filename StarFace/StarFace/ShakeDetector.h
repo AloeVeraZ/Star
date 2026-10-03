@@ -1,0 +1,167 @@
+#pragma once
+#include <math.h>
+#include <stdint.h>
+#include "FaceConfig.h"
+
+// Shake recognition, kept free of Arduino calls so it can be tested on a PC
+// (tools/preview/shake_test.cpp) with simulated accelerometer data.
+//
+// Input is the gravity-free acceleration (m/s^2) and rotation rate (rad/s),
+// sampled at whatever rate the render loop allows (roughly every 20-70 ms).
+// Two independent triggers make it dizzy, so an irregular real-world shake
+// still counts:
+//   * strokes: strong pushes that reverse direction, each within SHAKE_GAP_MS
+//   * strength: a running average of how hard it is shaken, held high
+class ShakeDetector {
+ public:
+  enum Event : uint8_t { NONE, FIRST_STROKE, STROKE, DIZZY };
+
+  float strength = 0;   // m/s^2 above SHAKE_NOISE_MS2, smoothed (~0.35 s)
+  uint8_t strokes = 0;  // strokes in the current shake
+
+  Event feed(const float lin[3], float spin, uint32_t now) {
+    float dt = lastSampleAt ? fminf(.1f, (now - lastSampleAt) / 1000.0f) : .025f;
+    lastSampleAt = now;
+    float jolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
+    // A wrist shake is partly rotation, so a fast spin counts as shaking too.
+    float excess = fmaxf(fmaxf(0.0f, jolt - SHAKE_NOISE_MS2), (spin - SHAKE_GYRO_RAD_S) * 2.5f);
+    strength += (excess - strength) * (1.0f - expf(-dt / .35f));
+
+    if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
+    Event ev = NONE;
+    if (jolt > SHAKE_STROKE_MS2 && (!lastStrokeAt || now - lastStrokeAt > 60)) {
+      float dot = lin[0] * dir[0] + lin[1] * dir[1] + lin[2] * dir[2];
+      if (strokes == 0 || dot < 0) {
+        ++strokes;
+        for (int i = 0; i < 3; ++i) dir[i] = lin[i];
+        lastStrokeAt = now;
+        ev = strokes == 1 ? FIRST_STROKE : STROKE;
+      }
+    }
+    strongSince = strength > SHAKE_DIZZY_STRENGTH ? (strongSince ? strongSince : now) : 0;
+    bool sustained = strongSince && now - strongSince >= SHAKE_DIZZY_HOLD_MS;
+    if (strokes >= SHAKE_STROKES_FOR_DIZZY || sustained) {
+      strokes = 0;
+      strongSince = 0;
+      return DIZZY;
+    }
+    return ev;
+  }
+
+  // 0 (still) .. ~1.3 (hard): how much the eyes should rattle right now.
+  float rattle() const {
+    return strength > SHAKE_NOISE_MS2 * .5f ? strength / SHAKE_FULL_MS2 : 0.0f;
+  }
+
+ private:
+  float dir[3] = {0, 0, 0};
+  uint32_t lastSampleAt = 0, lastStrokeAt = 0, strongSince = 0;
+};
+
+// ---- Twist: quick back-and-forth turns around either axis across the screen ----
+static constexpr uint32_t TWIST_WINDOW_MS = 3000;
+static constexpr uint32_t TWIST_MAX_PAUSE_MS = 600;
+static constexpr float TWIST_RATE_RAD_S = 1.2f;        // about 69 degrees/s on X or Y
+static constexpr float TWIST_MIN_HALF_TURN_RAD = .25f; // about 14 degrees each way
+static constexpr uint8_t TWIST_REVERSALS_TO_WAKE = 3;
+
+struct TwistAxis {
+  uint32_t startedAt = 0, lastMoveAt = 0;
+  float halfTurn = 0;
+  int8_t direction = 0;
+  uint8_t reversals = 0;
+
+  void reset() {
+    startedAt = lastMoveAt = 0;
+    halfTurn = 0;
+    direction = 0;
+    reversals = 0;
+  }
+
+  bool feed(float rate, uint32_t now, uint32_t dt) {
+    if (startedAt && (now - lastMoveAt > TWIST_MAX_PAUSE_MS ||
+                      now - startedAt > TWIST_WINDOW_MS)) reset();
+    if (fabsf(rate) < TWIST_RATE_RAD_S) return false;
+    int8_t nextDirection = rate > 0 ? 1 : -1;
+    float step = fabsf(rate) * (dt < 60 ? dt : 60) / 1000.0f;
+    if (!startedAt) {
+      startedAt = now;
+      direction = nextDirection;
+      halfTurn = step;
+    } else if (direction == nextDirection) {
+      halfTurn += step;
+    } else {
+      // A reversal only counts after a real angular sweep, not gyro noise.
+      if (halfTurn >= TWIST_MIN_HALF_TURN_RAD) ++reversals;
+      else reversals = 0;
+      direction = nextDirection;
+      halfTurn = step;
+    }
+    lastMoveAt = now;
+    if (reversals >= TWIST_REVERSALS_TO_WAKE &&
+        halfTurn >= TWIST_MIN_HALF_TURN_RAD) {
+      reset();
+      return true;
+    }
+    return false;
+  }
+};
+
+struct TwistDetector {
+  TwistAxis axis[2]; // board X and Y run parallel to the screen
+  uint32_t lastSampleAt = 0;
+
+  bool feed(const float gyro[3], uint32_t now) {
+    uint32_t dt = lastSampleAt ? now - lastSampleAt : 25;
+    lastSampleAt = now;
+    bool x = axis[0].feed(gyro[0], now, dt);
+    bool y = axis[1].feed(gyro[1], now, dt);
+    return x || y;
+  }
+
+  bool active() const { return axis[0].startedAt || axis[1].startedAt; }
+  bool progressing() const {
+    return axis[0].reversals >= 2 || axis[1].reversals >= 2;
+  }
+};
+
+// Wake check after the IMU's motion alarm woke the CPU with the screen dark:
+// the same shake that makes it dizzy while awake turns it on. Gravity is
+// estimated from scratch here (the CPU was off), starting from the first
+// sample scaled to 1 g, so a shake already under way is measured correctly
+// within a fraction of a second.
+class ShakeWakeCheck {
+ public:
+  uint8_t jolts = 0;   // strokes seen (for the log)
+  float lastJolt = 0;
+
+  bool feed(const float a[3], const float g[3], uint32_t now) {
+    float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    if (!seeded) {
+      float s = mag > .1f ? 9.81f / mag : 0.0f;
+      for (int i = 0; i < 3; ++i) grav[i] = a[i] * s;
+      seeded = true;
+      lastAt = now;
+    }
+    float dt = (now - lastAt) / 1000.0f;
+    lastAt = now;
+    float k = 1.0f - expf(-dt / .25f), lin[3];
+    for (int i = 0; i < 3; ++i) {
+      grav[i] += (a[i] - grav[i]) * k;
+      lin[i] = a[i] - grav[i];
+    }
+    float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    ShakeDetector::Event ev = det.feed(lin, spin, now);
+    if (ev == ShakeDetector::FIRST_STROKE || ev == ShakeDetector::STROKE) {
+      ++jolts;
+      lastJolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
+    }
+    return ev == ShakeDetector::DIZZY;
+  }
+
+ private:
+  ShakeDetector det;
+  float grav[3] = {0, 0, 0};
+  bool seeded = false;
+  uint32_t lastAt = 0;
+};

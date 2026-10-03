@@ -79,14 +79,12 @@ static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a n
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to
 // black, then the screen and ESP32 power down (deep sleep). A touch or a shake
-// wakes it again. Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it
+// wakes it again (the same shake that makes it dizzy; see the shake settings). Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it
 // then naps with a dim, breathing glow after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
 static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // power-save timeout when AUTO_DEEP_SLEEP
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
 static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
-static constexpr uint8_t SHAKE_STROKES_TO_WAKE = 2;    // strong jolts after the motion alarm that wake it
-static constexpr float SHAKE_WAKE_MS2 = 6.0f;          // how strong each of those jolts must be
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
 

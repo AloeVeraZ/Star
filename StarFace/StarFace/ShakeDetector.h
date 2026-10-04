@@ -30,8 +30,13 @@ class ShakeDetector {
   uint8_t strokes = 0;  // strokes in the current shake
   // Thresholds (awake defaults; the wake-from-sleep check uses its own).
   float strokeMs2 = SHAKE_STROKE_MS2;
-  uint8_t strokesForDizzy = SHAKE_STROKES_FOR_DIZZY;
   float dizzyStrength = SHAKE_DIZZY_STRENGTH;
+  // Awake, DIZZY needs a steady shake kept up for SHAKE_DIZZY_HOLD_MS. The
+  // wake-from-sleep check instead uses the quick rule (strokesForDizzy strokes
+  // in a row, or holdMs of strong shaking) only to count its own jolts.
+  bool steadyDizzy = true;
+  uint8_t strokesForDizzy = 3;
+  uint32_t holdMs = SHAKE_DIZZY_HOLD_MS;
   // Rotation faster than this counts as shaking too (0: never; awake, only
   // real back-and-forth motion counts, so turning it can't make it dizzy).
   float spinRadS = 0;
@@ -63,8 +68,41 @@ class ShakeDetector {
         if (ev != BUMP) ev = strokes == 2 ? STARTLE : STROKE;
       }
     }
+    if (steadyDizzy) {
+      // A steady shake: strong enough on average, kept up (short dips are
+      // forgiven), and really back and forth (swings that reverse).
+      if (strength > dizzyStrength) {
+        if (!shakingSince) { shakingSince = now; swings = 0; }
+        lastStrongAt = now;
+      } else if (shakingSince && now - lastStrongAt > SHAKE_DIZZY_DROPOUT_MS) {
+        shakingSince = 0;   // it stopped: start over
+        swings = 0;
+      }
+      if (shakingSince && jolt > SHAKE_NOISE_MS2 + dizzyStrength && now - lastSwingAt > 60) {
+        float dot = lin[0] * swingDir[0] + lin[1] * swingDir[1] + lin[2] * swingDir[2];
+        if (swings == 0 || dot < 0) {
+          ++swings;
+          for (int i = 0; i < 3; ++i) swingDir[i] = lin[i];
+          lastSwingAt = now;
+        }
+      }
+      // Swings must keep coming: a shake that stopped no longer counts, even
+      // while the averaged strength is still fading out.
+      if (shakingSince && swings && now - lastSwingAt > SHAKE_DIZZY_DROPOUT_MS + 100) {
+        shakingSince = 0;
+        swings = 0;
+      }
+      if (shakingSince && now - shakingSince >= holdMs && swings >= SHAKE_DIZZY_SWINGS &&
+          now - lastSwingAt <= SHAKE_DIZZY_DROPOUT_MS) {
+        shakingSince = now;  // keep shaking: another spell after another hold
+        swings = 0;
+        strokes = 0;
+        return DIZZY;
+      }
+      return ev;
+    }
     strongSince = strength > dizzyStrength ? (strongSince ? strongSince : now) : 0;
-    bool sustained = strongSince && now - strongSince >= SHAKE_DIZZY_HOLD_MS;
+    bool sustained = strongSince && now - strongSince >= holdMs;
     if (strokes >= strokesForDizzy || sustained) {
       strokes = 0;
       strongSince = 0;
@@ -72,6 +110,9 @@ class ShakeDetector {
     }
     return ev;
   }
+
+  // How long the current steady shake has been kept up (0: not shaking).
+  uint32_t shakingFor(uint32_t now) const { return shakingSince ? now - shakingSince : 0; }
 
   // 0 (still) .. ~1.3 (hard): how much the eyes should rattle right now.
   float rattle() const {
@@ -81,6 +122,9 @@ class ShakeDetector {
  private:
   float dir[3] = {0, 0, 0};
   uint32_t lastSampleAt = 0, lastStrokeAt = 0, strongSince = 0, lastBusyAt = 0, lastBumpAt = 0;
+  uint32_t shakingSince = 0, lastStrongAt = 0, lastSwingAt = 0;
+  float swingDir[3] = {0, 0, 0};
+  uint8_t swings = 0;
 };
 
 // ---- Twist: quick back-and-forth turns around either axis across the screen ----
@@ -165,8 +209,10 @@ class ShakeWakeCheck {
 
   ShakeWakeCheck() {      // the sleep-time thresholds (unchanged by awake tuning)
     det.strokeMs2 = SHAKE_WAKE_STROKE_MS2;
+    det.steadyDizzy = false;
     det.strokesForDizzy = 3;
     det.dizzyStrength = 3.5f;
+    det.holdMs = 400;
     det.spinRadS = SHAKE_GYRO_RAD_S;
   }
 

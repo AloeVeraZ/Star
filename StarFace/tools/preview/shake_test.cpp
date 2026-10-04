@@ -90,18 +90,19 @@ static int runWake(Motion &m, float bootDelay) {
 
 int main() {
   int fails = 0;
-  printf("Awake: ms until DIZZY for a shake (amplitude m/s^2 x frequency), by loop sample period\n");
+  printf("Awake: ms until DIZZY for a shake kept up (starting at 0.3 s; amplitude m/s^2 x frequency), by loop sample period\n");
   printf("  amp  freq |  25ms  45ms  70ms\n");
   const float amps[] = {6, 9, 12, 18, 30}, freqs[] = {2.5f, 4, 6};
   for (float A : amps) for (float f : freqs) {
     printf("  %4.0f %4.1f |", A, f);
     for (int p : {25, 45, 70}) {
-      int s; int ms = runAwake(*new Shake(A, f), p, 3.0f, &s);
+      int s; int ms = runAwake(*new Shake(A, f), p, 7.0f, &s);
       printf(" %5d", ms);
-      // A heavy, rapid shake (>= ~1.8 g at 4+ Hz) must make it dizzy within
-      // 2.5 s at any loop rate; a moderate one (<= ~0.9 g) never.
-      if (A >= 18 && f >= 4 && (ms < 0 || ms > 2500)) { ++fails; printf("!"); }
-      if (A <= 9 && ms >= 0) { ++fails; printf("!"); }
+      // A real shake (>= ~1.2 g) kept up makes it dizzy after about 3 s of
+      // shaking (it starts 0.3 s in), never sooner; a light one (0.6 g) never.
+      if (A >= 12 && (ms < 3300 || ms > 4600)) { ++fails; printf("!"); }
+      if (ms >= 0 && ms < 3300) { ++fails; printf("!"); }
+      if (A <= 6 && ms >= 0) { ++fails; printf("!"); }
     }
     printf("\n");
   }
@@ -111,6 +112,21 @@ int main() {
     printf("Turning it back and forth (mostly rotation, 6 rad/s), %d ms loop: %s\n", p,
            ms < 0 ? "not dizzy" : "DIZZY  <-- WRONG (rotation alone must not)");
     if (ms >= 0) ++fails;
+  }
+  printf("Shakes that stop too soon must not make it dizzy:\n");
+  {
+    struct { const char *name; Motion *m; } brief[] = {
+      {"hard shake for 2 s", new Shake(18, 4, 0, 2.3f)},
+      {"hard shake for 2.7 s", new Shake(18, 4, 0, 3.0f)},
+      {"2 s, a 0.8 s pause, 2 s", new Shake(18, 4, 0, 1e9f, 2.3f, .8f)},
+    };
+    for (auto &b : brief) {
+      for (int p : {25, 45, 70}) {
+        int st; int got = runAwake(*b.m, p, b.name[0] == '2' ? 4.9f : 6.0f, &st);
+        printf("  %-26s %d ms loop: %s\n", b.name, p, got < 0 ? "not dizzy" : "DIZZY  <-- WRONG");
+        if (got >= 0) ++fails;
+      }
+    }
   }
   struct { const char *name; Motion *m; } calm[] = {
     {"walking", new Walk(3.0f, 1.8f)}, {"brisk walking", new Walk(4.5f, 2.2f)},

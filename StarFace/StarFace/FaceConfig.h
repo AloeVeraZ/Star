@@ -73,17 +73,20 @@ static constexpr float SAFE_MARGIN = 0.04f;       // keep the eyes this far (of 
 static constexpr float FACE_ANGLE_DEG = 0.0f;
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
-// Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
+// Lower SHAKE_DIZZY_STRENGTH / SHAKE_DIZZY_HOLD_MS if shaking feels too hard,
 // raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
 // print each stroke's strength over serial while you tune.
-static constexpr float SHAKE_STROKE_MS2 = 11.0f;  // one hard stroke of a shake (~1.1 g beyond gravity)
-static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 5; // hard back-and-forth strokes in a row for the dizzy spell
+static constexpr float SHAKE_STROKE_MS2 = 11.0f;  // one hard stroke: the eyes slosh, two back and forth startle it
 static constexpr uint32_t SHAKE_GAP_MS = 500;     // longest pause between strokes of one shake
 static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
 static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for a full-strength rattle
-// Dizzy also triggers on sustained hard shaking, however the strokes line up:
-static constexpr float SHAKE_DIZZY_STRENGTH = 7.5f; // average shake strength (m/s^2 above noise)...
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 550; // ...kept up for this long
+// The dizzy spell needs a real shake kept up: back and forth, at least this
+// strong on average, for SHAKE_DIZZY_HOLD_MS without stopping (dips shorter
+// than SHAKE_DIZZY_DROPOUT_MS are forgiven; a longer pause starts over).
+static constexpr float SHAKE_DIZZY_STRENGTH = 4.0f;  // average shake strength (m/s^2 above noise, ~0.7 g shaking)...
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 3000; // ...kept up for this long
+static constexpr uint32_t SHAKE_DIZZY_DROPOUT_MS = 350;
+static constexpr uint8_t SHAKE_DIZZY_SWINGS = 6;     // ...with at least this many back-and-forth swings
 // Asleep it is much harder to wake: it takes a steady shake, kept up for
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking

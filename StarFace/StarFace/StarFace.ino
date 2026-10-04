@@ -458,8 +458,9 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   bool rocking = rocker.feed(a, g, now);
   if (LOG_SHAKE && shaker.strength > 1.0f && now - lastLogAt > 200) {
     lastLogAt = now;
-    Serial.printf("shake: strength %.1f (dizzy at %.1f)  jolt %.1f m/s^2  spin %.1f rad/s  strokes %u\n",
-                  shaker.strength, SHAKE_DIZZY_STRENGTH, jolt, spin, shaker.strokes);
+    Serial.printf("shake: strength %.1f (dizzy at %.1f, kept up %.1f of %.1f s)  jolt %.1f m/s^2\n",
+                  shaker.strength, SHAKE_DIZZY_STRENGTH, shaker.shakingFor(now) / 1000.0f,
+                  SHAKE_DIZZY_HOLD_MS / 1000.0f, jolt);
   }
   if (ev == ShakeDetector::DIZZY) {
     // Wobble, spiral eyes, glare, calm down. Keep shaking: it spins again.

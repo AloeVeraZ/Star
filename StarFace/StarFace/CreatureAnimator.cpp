@@ -103,7 +103,7 @@ void CreatureAnimator::begin(Eyes *e, uint32_t unitSeed, uint32_t now) {
   blLevel = 0;
   current = previous = Mood::IDLE;
   moodStart = moodUntil = now;
-  nextIdleAct = now + randMs(12000, 19000);
+  nextIdleAct = now + randMs(4500, 6500);
 }
 
 bool CreatureAnimator::activeAt(uint32_t now) const {
@@ -176,6 +176,7 @@ void CreatureAnimator::startWake(uint32_t now, bool fromShake, bool touched) {
   napLevel = 0;
   const WakeScript &s = WAKE_SCRIPTS[wakeVariant];
   uint32_t duration = uint32_t(s.keys[s.count - 1].t * wakeScale);
+  nextIdleAct = now + duration + randMs(1500, 3000);   // soon after it is up, it starts doing things
   queued = Mood::IDLE;
   enterMood(Mood::WAKE_UP, now, duration);
   if (fromShake) queue(Mood::DIZZY, moodUntil, DIZZY_ANIM_MS);
@@ -348,7 +349,7 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
     } else {
       act = r < .26f ? Mood::LOOK_AROUND : r < .46f ? Mood::CURIOUS : r < (bored ? .70f : .56f) ? Mood::YAWN
           : r < .74f ? Mood::HAPPY : r < .84f ? Mood::CONFUSED : r < .93f ? Mood::SHY : Mood::SURPRISED;
-      nextIdleAct = now + uint32_t(randMs(6000, 12000) / (bored ? 1.4f : 1.0f));
+      nextIdleAct = now + uint32_t(randMs(3200, 6000) / (bored ? 1.3f : 1.0f));
     }
     uint32_t len = act == Mood::LOOK_AROUND ? 2300 : act == Mood::YAWN ? 1900
                  : act == Mood::CURIOUS ? 1700 : randMs(520, 900);

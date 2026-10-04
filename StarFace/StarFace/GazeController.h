@@ -31,7 +31,7 @@ class GazeController {
       } else {
         sacX.target = sacY.target = 0;
       }
-      uint32_t gap = tense ? anim::randMs(110, 320) : anim::randMs(350, 1400);
+      uint32_t gap = tense ? anim::randMs(110, 320) : anim::randMs(250, 900);
       nextSaccadeAt = now + uint32_t(gap * (1.0f + drowsy));
     }
     if (!sacOn) sacX.target = sacY.target = 0;

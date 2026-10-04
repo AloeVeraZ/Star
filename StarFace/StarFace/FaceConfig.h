@@ -43,8 +43,8 @@ static constexpr float PUPIL_LIFE = 1.0f;         // pupil dilation and fixation
 
 // ---- Movement limits ---------------------------------------------------------
 static constexpr float MAX_PUPIL_MOVE = 0.85f;    // 0..1: how far an iris may roam inside its eye
-static constexpr float MAX_EYE_MOVE_X = 0.055f;   // how far the whole eyes follow the gaze, of screen
-static constexpr float MAX_EYE_MOVE_Y = 0.045f;
+static constexpr float MAX_EYE_MOVE_X = 0.070f;   // how far the whole eyes follow the gaze, of screen
+static constexpr float MAX_EYE_MOVE_Y = 0.055f;
 static constexpr float MAX_EXPRESSION_EXPANSION = 1.15f; // largest size any expression may reach
 
 // ---- Animation -----------------------------------------------------------------
@@ -57,7 +57,7 @@ static constexpr uint32_t BLINK_MIN_MS = 2200;    // blink frequency: time betwe
 static constexpr uint32_t BLINK_MAX_MS = 6500;
 static constexpr float DOUBLE_BLINK_CHANCE = 0.12f;
 static constexpr float GAZE_SPEED = 1.0f;         // how quickly the eyes move to a new target
-static constexpr float IDLE_LIVELINESS = 1.3f;    // idle look-arounds and fidgets: 0 still .. 2 restless
+static constexpr float IDLE_LIVELINESS = 1.6f;    // idle look-arounds and fidgets: 0 still .. 2 restless
 static constexpr float SQUASH_STRETCH = 1.0f;     // 0 disables velocity squash & stretch
 static constexpr float ANGER_COOLDOWN_S = 4.0f;   // lids stay a little grumpy this long after anger
 

@@ -1055,8 +1055,9 @@ void loop() {
   }
   if (!sleepPreparing) {
     float idle = (now - lastActivity) / float(timeout);
-    creature.setDrowsiness(anim::smoothstep(.6f, 1.0f, idle));
-    creature.setIdleActsAllowed(now - lastActivity + 2500 < timeout);
+    // Lively right up to the end: heavy lids only in the last couple of seconds.
+    creature.setDrowsiness(anim::smoothstep(.82f, 1.0f, idle));
+    creature.setIdleActsAllowed(now - lastActivity + 1800 < timeout);
   }
   renderFrame();
   delay(1);

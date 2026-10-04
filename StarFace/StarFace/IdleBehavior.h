@@ -24,7 +24,7 @@ class IdleBehavior {
       quirk = QUIRKS[int(anim::frand() * 4) & 3];
       quirkAmount = anim::frand(.25f, .45f);
       quirkUntil = now + anim::randMs(600, 1400);
-      nextQuirkAt = now + uint32_t(anim::randMs(8000, 17000) / liveliness);
+      nextQuirkAt = now + uint32_t(anim::randMs(4000, 9000) / liveliness);
     }
     if (int32_t(now - nextGazeAt) < 0) return false;
     pick(now, drowsy, bigJump);
@@ -68,14 +68,14 @@ class IdleBehavior {
     float r = frand(), nx, ny;
     fast = false;
     const float live = anim::clampf(liveliness, 0.0f, 2.0f);
-    if (r < .22f + .3f * fmaxf(0.0f, 1.0f - live) + .4f * eyeContact) {
+    if (r < .14f + .3f * fmaxf(0.0f, 1.0f - live) + .4f * eyeContact) {
       nx = ny = 0;            // looks back at you often: eye contact feels friendly
-    } else if (r < .52f) {
-      float a = frand(0, anim::TAU_F), d = frand(.10f, .30f);
+    } else if (r < .42f) {
+      float a = frand(0, anim::TAU_F), d = frand(.15f, .35f);
       nx = gazeX * .6f + cosf(a) * d;
       ny = gazeY * .6f + sinf(a) * d;
-    } else if (r < .78f) {
-      float a = frand(0, anim::TAU_F), d = frand(.35f, .6f);
+    } else if (r < .76f) {
+      float a = frand(0, anim::TAU_F), d = frand(.40f, .70f);
       nx = cosf(a) * d;
       ny = sinf(a) * d;
     } else {
@@ -101,7 +101,7 @@ class IdleBehavior {
       hold = randMs(220, 480);
     } else {
       float p = frand();
-      hold = p < .6f ? randMs(700, 2500) : p < .9f ? randMs(2500, 4500) : randMs(4500, 7500);
+      hold = p < .65f ? randMs(450, 1500) : p < .92f ? randMs(1500, 2800) : randMs(2800, 4200);
       if (live > 0) hold = uint32_t(hold / fmaxf(.4f, live));
     }
     nextGazeAt = now + uint32_t(hold * (1.0f + drowsy));

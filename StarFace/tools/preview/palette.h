@@ -42,6 +42,7 @@ inline bool inPalette(uint16_t v) {
     ee += E[i] * E[i]; pp += P[i] * P[i]; ep += E[i] * P[i]; ce += px[i] * E[i]; cp += px[i] * P[i];
   }
   float det = ee * pp - ep * ep;
+  if (det < 1e-3f * ee * (pp + 1)) return onRay(px, EYE_COLOR) || onRay(px, PUPIL_COLOR); // e.g. a black iris
   float a = (ce * pp - cp * ep) / det, b = (cp * ee - ce * ep) / det;
   // Outside the blend triangle: the closest point is on one of its edges.
   if (a < 0 || b < 0 || a + b > 1) return onRay(px, EYE_COLOR) || onRay(px, PUPIL_COLOR) || onEdge(px);

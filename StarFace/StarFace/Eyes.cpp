@@ -311,8 +311,14 @@ void Eyes::fitToScreen(EyeFrame &f) const {
   const float ux = fx / len, uy = fy / len;
   // Overflow at the sides is mostly absorbed by shrinking (moving inward would
   // crowd the pair together); at the top and bottom by moving.
-  const float move = excess * mix(.3f, .8f, uy * uy);
+  float move = excess * mix(.3f, .8f, uy * uy);
+  float rest = excess - move;
+  if (reach > 1.0f) {
+    const float k = clampf(1.0f - rest / reach, .85f, 1.0f);
+    scaleFrame(f, k);
+    rest -= (1.0f - k) * reach;
+  }
+  move += fmaxf(0.0f, rest);   // whatever a small shrink can't absorb, it moves in
   f.cx -= ux * move;
   f.cy -= uy * move;
-  if (reach > 1.0f) scaleFrame(f, clampf(1.0f - (excess - move) / reach, .85f, 1.0f));
 }

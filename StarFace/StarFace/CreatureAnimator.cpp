@@ -79,6 +79,7 @@ uint8_t priorityOf(Mood m) {
     case Mood::ANGRY: case Mood::BOOP: case Mood::ANXIOUS: case Mood::SWIPING: case Mood::FOLLOWING:
     case Mood::PETTED: case Mood::BATTERY: case Mood::LOVED: case Mood::UPSIDE_DOWN: return 4;
     case Mood::HAPPY: case Mood::SAD: case Mood::SHY: case Mood::CONFUSED: return 3;
+    case Mood::CURIOUS: case Mood::YAWN: case Mood::LOOK_AROUND: return 2;
     case Mood::SHIVER: case Mood::WAKE_UP: return 2;
     case Mood::SLEEPY: return 1;
     default: return 0;
@@ -219,6 +220,14 @@ void CreatureAnimator::notice(float level, uint32_t now) {
   if (chance(.35f)) eyes->blink(Blinker::FAST);
 }
 
+void CreatureAnimator::setCarried(bool walk, bool run, bool step, float stepStrength) {
+  walking = walk;
+  running = run;
+  // Each footstep bobs the eyes, a little more for a heavier step.
+  if (step && current != Mood::SLEEPY && current != Mood::DIZZY)
+    eyes->push(0, (12.0f + 10.0f * clampf(stepStrength / 4.0f, 0.0f, 1.5f)) * PX);
+}
+
 void CreatureAnimator::impact(float ax, float ay) {
   float mag = sqrtf(ax * ax + ay * ay);
   if (mag < .01f) return;
@@ -266,6 +275,9 @@ void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, floa
       break;
     case Mood::ANXIOUS:
       nextDartAt = now;
+      break;
+    case Mood::CURIOUS: case Mood::LOOK_AROUND:
+      lookSide = chance(.5f) ? 1.0f : -1.0f;
       break;
     case Mood::SURPRISED:
       eyes->push(0, -45.0f * PX);
@@ -319,12 +331,31 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
     }
   }
   age = int32_t(now - moodStart);
-  // Now and then it puts on a little show by itself.
+  // Now and then it does something by itself, depending on what is going on:
+  // held up in front of you it is sweet and attentive; carried around it
+  // watches the world go by; left lying still it gets curious, then bored.
+  const bool attending = heldUp && now - heldSince > 1200;
+  const bool bored = stillMs > 20000;
   if (current == Mood::IDLE && idleActsAllowed && int32_t(now - nextIdleAct) >= 0) {
-    static const Mood ACTS[] = {Mood::CONFUSED, Mood::HAPPY, Mood::SHY, Mood::CONFUSED, Mood::HAPPY, Mood::SURPRISED};
-    reactPassive(ACTS[int(frand() * 6) % 6], now, randMs(480, 830));
-    nextIdleAct = now + randMs(12000, 21000);
+    float r = frand();
+    Mood act;
+    if (attending) {
+      act = r < .45f ? Mood::HAPPY : r < .75f ? Mood::CURIOUS : r < .88f ? Mood::SHY : Mood::LOVED;
+      nextIdleAct = now + randMs(3500, 7000);
+    } else if (walking) {
+      act = r < .45f ? Mood::LOOK_AROUND : r < .75f ? Mood::CURIOUS : r < .9f ? Mood::HAPPY : Mood::SURPRISED;
+      nextIdleAct = now + randMs(4500, 9000);
+    } else {
+      act = r < .26f ? Mood::LOOK_AROUND : r < .46f ? Mood::CURIOUS : r < (bored ? .70f : .56f) ? Mood::YAWN
+          : r < .74f ? Mood::HAPPY : r < .84f ? Mood::CONFUSED : r < .93f ? Mood::SHY : Mood::SURPRISED;
+      nextIdleAct = now + uint32_t(randMs(6000, 12000) / (bored ? 1.4f : 1.0f));
+    }
+    uint32_t len = act == Mood::LOOK_AROUND ? 2300 : act == Mood::YAWN ? 1900
+                 : act == Mood::CURIOUS ? 1700 : randMs(520, 900);
+    reactPassive(act, now, len);
   }
+  // Restless while carried or bored, eye contact while held up.
+  eyes->setLiveliness(IDLE_LIVELINESS * (walking ? 1.5f : 1.0f) * (bored ? 1.2f : 1.0f), attending ? .8f : 0.0f);
 }
 
 // ---- Expression, lids and blinks for the current mood ----
@@ -342,6 +373,9 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
     case Mood::IDLE:
       k = 1;
       if (grumpy > .01f) { b = ANNOYED; t = grumpy; } // still sulking after anger
+      else if (running) { b = SURPRISED; t = .45f; }  // whee: wide-eyed
+      else if (walking) { b = HAPPY; t = .18f; }      // out and about: smiling eyes
+      else if (heldUp && now - heldSince > 1200) { b = HAPPY; t = .10f; } // looking at you, softly
       break;
     case Mood::HAPPY: e = HAPPY; pace = .9f; break;
     case Mood::SAD: e = SAD; pace = 1.35f; break;
@@ -404,6 +438,17 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
       break;
     case Mood::SHY: e = WORRIED; k *= .7f; open[0] = .62f; open[1] = .52f; break;
     case Mood::SHIVER: e = SQUINT; k *= .8f; break;
+    case Mood::CURIOUS: e = CURIOUS; break;
+    case Mood::LOOK_AROUND: e = NEUTRAL; b = CURIOUS; t = .35f; break;
+    case Mood::YAWN:
+      // Lids get heavy, the eyes squeeze shut in a big yawn, then a slow blink.
+      blinkOK = false;
+      if (age < 450) { e = SLEEPY; k = .7f; open[0] = open[1] = .85f; openSpeed = .6f; }
+      else if (age < 1250) { e = SQUINT; k = 1; open[0] = open[1] = .3f; openSpeed = .45f; }
+      else { e = SLEEPY; k = .35f; openSpeed = .5f; }
+      if (crossed(450)) for (int i = 0; i < 2; ++i) eyes->kickShape(i, ES_WIDTH, 1.2f);
+      if (crossed(1500)) eyes->blink(Blinker::SLOW);
+      break;
     case Mood::BATTERY: {
       scripted = true;
       blinkOK = false;
@@ -509,7 +554,8 @@ void CreatureAnimator::updateGaze(uint32_t now) {
   eyes->setFaceRoll(awake ? faceRoll : 0.0f);
   eyes->setLookOffset(awake ? swingX : 0.0f, awake ? swingY : 0.0f);
   // Interested pupils: a little wider while something is going on.
-  float attention = fminf(1.0f, sqrtf(tiltX * tiltX + tiltY * tiltY) + (pointerHeld ? .6f : 0.0f));
+  float attention = fminf(1.0f, sqrtf(tiltX * tiltX + tiltY * tiltY) + (pointerHeld ? .6f : 0.0f)
+                               + (heldUp ? .6f : 0.0f) + (walking ? .3f : 0.0f));
   eyes->setPupilDilation(1.0f + .08f * attention);
   bool usePointer = pointerHeld ||
       (now - pointerAt < 1300 && (current == Mood::HAPPY || current == Mood::BOOP || current == Mood::PETTED ||
@@ -548,6 +594,16 @@ void CreatureAnimator::updateGaze(uint32_t now) {
     case Mood::WAKE_UP: case Mood::SLEEPY: own = true; gx = scriptGX; gy = scriptGY; speed = scriptGazeSpeed; break;
     case Mood::BATTERY: own = true; gx = gy = 0; speed = .9f; break;
     case Mood::CONFUSED: own = true; gx = .35f; gy = -.4f; speed = .8f; break;
+    case Mood::CURIOUS: own = true; gx = .6f * lookSide; gy = -.18f; speed = .9f; break;
+    case Mood::YAWN: own = true; gx = 0; gy = age < 1250 ? -.35f : 0.0f; speed = .5f; break;
+    case Mood::LOOK_AROUND:
+      // A look around the room: one side, the other, up, then back to you.
+      own = true; speed = 1.6f;
+      if (age < 650) { gx = -.85f * lookSide; gy = -.1f; }
+      else if (age < 1350) { gx = .85f * lookSide; gy = -.2f; }
+      else if (age < 1850) { gx = -.3f * lookSide; gy = -.6f; }
+      else { gx = 0; gy = 0; }
+      break;
     case Mood::SWIPING: own = true; gx = swipeX; gy = swipeY; speed = 1.5f; break;
     default: break;
   }

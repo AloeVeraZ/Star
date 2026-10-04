@@ -15,7 +15,8 @@ static constexpr uint32_t SLEEP_SEQUENCE_MS = 5400;
 enum class Mood : uint8_t {
   IDLE, HAPPY, SAD, ANGRY, DIZZY, SLEEPY, SURPRISED, ANXIOUS,
   WAKE_UP, BATTERY, BOOP, PETTED, SWIPING, FOLLOWING, CONFUSED, SHY,
-  SHIVER, LOVED, UPSIDE_DOWN
+  SHIVER, LOVED, UPSIDE_DOWN,
+  CURIOUS, YAWN, LOOK_AROUND   // little things it does by itself
 };
 
 // The creature's behaviour on top of the eye system: it turns events into
@@ -52,6 +53,15 @@ class CreatureAnimator {
   void setSwing(float x, float y) { swingX = x; swingY = y; }
   // A bump or a pick-up it noticed while calm: a quick widen and blink, no mood change.
   void notice(float level, uint32_t now);
+  // Being carried: walking (or running), with each footstep as it lands.
+  void setCarried(bool walking, bool running, bool step, float stepStrength);
+  // Held up in front of someone and fairly still: it pays attention to them.
+  void setHeldUp(bool held, uint32_t now) {
+    if (held && !heldUp) heldSince = now;
+    heldUp = held;
+  }
+  // How long it has been lying perfectly still (it gets bored, then sleepy).
+  void setStillFor(uint32_t ms) { stillMs = ms; }
   void setPointer(float x, float y, uint32_t now);
   // A finger is on the screen. The longer it stays, the angrier it gets.
   void setPointerHeld(bool held, uint32_t now) {
@@ -115,6 +125,9 @@ class CreatureAnimator {
   float tiltX = 0, tiltY = 0, faceRoll = 0, swingX = 0, swingY = 0;
   uint32_t lastNoticeAt = 0;
   bool ownedGaze = false;
+  bool walking = false, running = false, heldUp = false;
+  uint32_t heldSince = 0, stillMs = 0;
+  float lookSide = 1;   // which way a curious look goes
   float pointerX = 0, pointerY = 0;
   uint32_t pointerAt = 0, holdSince = 0;
   bool pointerHeld = false, upsideDown = false;

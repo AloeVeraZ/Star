@@ -19,12 +19,12 @@ class IdleBehavior {
   bool update(uint32_t now, float drowsy, bool &bigJump) {
     bigJump = false;
     if (quirk != NEUTRAL && int32_t(now - quirkUntil) >= 0) quirk = NEUTRAL;
-    if (IDLE_LIVELINESS > 0 && quirk == NEUTRAL && int32_t(now - nextQuirkAt) >= 0) {
+    if (liveliness > 0 && quirk == NEUTRAL && int32_t(now - nextQuirkAt) >= 0) {
       static const Expression QUIRKS[] = {SQUINT, CURIOUS, SUSPICIOUS, HAPPY};
       quirk = QUIRKS[int(anim::frand() * 4) & 3];
       quirkAmount = anim::frand(.25f, .45f);
       quirkUntil = now + anim::randMs(600, 1400);
-      nextQuirkAt = now + uint32_t(anim::randMs(8000, 17000) / IDLE_LIVELINESS);
+      nextQuirkAt = now + uint32_t(anim::randMs(8000, 17000) / liveliness);
     }
     if (int32_t(now - nextGazeAt) < 0) return false;
     pick(now, drowsy, bigJump);
@@ -37,6 +37,12 @@ class IdleBehavior {
     glancing = false;
     quirk = NEUTRAL;
   }
+
+  // How restless it is (IDLE_LIVELINESS, raised while it is carried around
+  // or bored): more, wider and quicker looks.
+  float liveliness = IDLE_LIVELINESS;
+  // Looks back at you (the centre) more often while being held up and looked at.
+  float eyeContact = 0;
 
   float gazeX = 0, gazeY = 0;  // where it wants to look, -1..1
   bool fast = false;           // a quick glance
@@ -61,8 +67,8 @@ class IdleBehavior {
     }
     float r = frand(), nx, ny;
     fast = false;
-    const float live = anim::clampf(IDLE_LIVELINESS, 0.0f, 1.5f);
-    if (r < .22f + .3f * (1.0f - live)) {
+    const float live = anim::clampf(liveliness, 0.0f, 2.0f);
+    if (r < .22f + .3f * fmaxf(0.0f, 1.0f - live) + .4f * eyeContact) {
       nx = ny = 0;            // looks back at you often: eye contact feels friendly
     } else if (r < .52f) {
       float a = frand(0, anim::TAU_F), d = frand(.10f, .30f);
@@ -84,8 +90,8 @@ class IdleBehavior {
         fast = true;
       }
     }
-    nx = anim::clampf(nx * live, -.95f, .95f);
-    ny = anim::clampf(ny * .8f * live, -.8f, .8f);
+    nx = anim::clampf(nx * fminf(live, 1.25f), -.95f, .95f);
+    ny = anim::clampf(ny * .8f * fminf(live, 1.25f), -.8f, .8f);
     float jump = sqrtf((nx - gazeX) * (nx - gazeX) + (ny - gazeY) * (ny - gazeY));
     bigJump = jump > .55f;
     gazeX = nx;

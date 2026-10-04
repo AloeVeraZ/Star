@@ -358,6 +358,45 @@ int main() {
     }
   }
 
+  printf("Being carried (footsteps, sampled every 25-70 ms):\n");
+  {
+    struct { const char *name; Motion *m; bool walk, run; } carry[] = {
+      {"walking", new Walk(3.0f, 1.8f), true, false},
+      {"brisk walking", new Walk(4.5f, 2.2f), true, false},
+      {"running", new Walk(8.0f, 2.8f), true, true},
+      {"lying still", new Knocks({}, 0), false, false},
+      {"shaking", new Shake(14, 4), false, false},
+      {"slow shaking", new Shake(9, 2), false, false},
+      {"rocking", new Turn(1, rock), false, false},
+      {"quick twists", new Turn(1, twist), false, false},
+      {"knocks", new Knocks({1, 1.3f, 3, 3.3f, 5}, 40), false, false},
+    };
+    for (int p : {25, 45, 70}) {
+      for (auto &c : carry) {
+        StepDetector st;
+        ShakeDetector sh;
+        float grav[3] = {0, 0, 9.81f};
+        int walkingFor = 0, runningFor = 0, samples = 0;
+        for (float tms = 0; tms < 10000; tms += p * (.7f + .6f * frand())) {
+          float a[3], g[3], lin[3];
+          c.m->at(tms / 1000, a, g);
+          for (int i = 0; i < 3; ++i) { grav[i] += (a[i] - grav[i]) * .08f; lin[i] = a[i] - grav[i]; }
+          sh.feed(lin, sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]), uint32_t(tms) + 1);
+          st.feed(a, sh.strength, uint32_t(tms) + 1);
+          if (tms > 4000) { ++samples; walkingFor += st.walking; runningFor += st.running; }
+        }
+        float w = walkingFor / float(samples), r = runningFor / float(samples);
+        snprintf(buf, sizeof buf, "walking %3.0f%%  running %3.0f%%", w * 100, r * 100);
+        char what[80];
+        snprintf(what, sizeof what, "%s (%d ms) -> %s", c.name, p, c.run ? "running" : c.walk ? "walking" : "not carried");
+        bool ok = c.walk ? w > .8f : w < .05f;
+        if (c.run) ok = ok && r > .6f;
+        else if (c.walk) ok = ok && r < .2f;
+        check(ok, what, buf);
+      }
+    }
+  }
+
   printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASSED", fails, fails == 1 ? "" : "s");
   return fails ? 1 : 0;
 }

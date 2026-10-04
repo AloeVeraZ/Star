@@ -57,7 +57,7 @@ static constexpr uint32_t BLINK_MIN_MS = 2200;    // blink frequency: time betwe
 static constexpr uint32_t BLINK_MAX_MS = 6500;
 static constexpr float DOUBLE_BLINK_CHANCE = 0.12f;
 static constexpr float GAZE_SPEED = 1.0f;         // how quickly the eyes move to a new target
-static constexpr float IDLE_LIVELINESS = 1.0f;    // idle look-arounds and fidgets: 0 still .. 1.5 restless
+static constexpr float IDLE_LIVELINESS = 1.3f;    // idle look-arounds and fidgets: 0 still .. 2 restless
 static constexpr float SQUASH_STRETCH = 1.0f;     // 0 disables velocity squash & stretch
 static constexpr float ANGER_COOLDOWN_S = 4.0f;   // lids stay a little grumpy this long after anger
 
@@ -67,6 +67,10 @@ static constexpr int SCREEN_HEIGHT = 240;
 // A round panel hides its corners: the eyes are then kept inside a circle.
 static constexpr bool SCREEN_IS_ROUND = true;
 static constexpr float SAFE_MARGIN = 0.04f;       // keep the eyes this far (of screen) from the edge
+// The eyes sit level with the board: their line is parallel to the edge with
+// the USB-C port. If the enclosure holds the board turned, turn the face to
+// match here (degrees, clockwise).
+static constexpr float FACE_ANGLE_DEG = 0.0f;
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
@@ -100,11 +104,15 @@ static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a n
 static constexpr uint8_t IMU_ROTATION = 0;
 static constexpr float TILT_GAZE = 2.2f;          // gaze per radian of tilt (~25 degrees = a full look)
 static constexpr float TILT_SETTLE_S = 20.0f;     // a tilt held still this long becomes the new normal
-static constexpr bool FACE_STAYS_LEVEL = true;    // roll the face against the star's turning
+static constexpr bool FACE_STAYS_LEVEL = false;   // true: roll the face to stay level with the ground
+                                                  // (false: the eyes stay square to the board and its USB port)
 static constexpr float FACE_ROLL_MAX = 0.75f;     // radians (~43 degrees), so upside down still reads as upside down
 static constexpr float SWING_GAZE = 0.12f;        // eye counter-move per rad/s of swing
 static constexpr float SPIN_TURNS_FOR_DIZZY = 1.5f; // spinning it around on the spot this many turns: dizzy
 static constexpr uint32_t FREEFALL_MS = 90;       // weightless this long (tossed or dropped): startled
+static constexpr float STEP_MS2 = 1.2f;           // a footstep bounce at least this strong (walking with it)
+static constexpr bool WALKING_KEEPS_AWAKE = true; // being carried around keeps it awake and watching
+static constexpr float HOT_C = 38.0f;             // the IMU chip warmer than this (pocket, hand, sun): lazy and yawny
 
 // ---- Motion gestures (everything also works without the touch screen) -------
 // Knock on the case 1/2/3/4 times = tap the screen 1/2/3/4 times; tip it one
@@ -153,7 +161,7 @@ static constexpr uint32_t TOUCH_STUCK_MS = 15000;
 // Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it then naps
 // with dimmed, closed eyes after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
-static constexpr uint32_t IDLE_SLEEP_MS = 30000;  // power-save timeout when AUTO_DEEP_SLEEP
+static constexpr uint32_t IDLE_SLEEP_MS = 60000;  // power-save timeout when AUTO_DEEP_SLEEP
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
 static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;

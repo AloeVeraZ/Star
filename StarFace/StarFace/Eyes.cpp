@@ -143,7 +143,7 @@ void Eyes::draw() {
 
 void Eyes::compose() {
   const float breath = (.7f * sinf(clock * TAU_F / 3.8f) + .3f * noise1(clock * .6f, seed + 3)) * PX;
-  const float roll = rollS.pos, rc = cosf(roll), rs = sinf(roll);
+  const float roll = rollS.pos + FACE_ANGLE_DEG * (PI_F / 180.0f), rc = cosf(roll), rs = sinf(roll);
   for (int i = 0; i < 2; ++i) {
     const EyeShape s = shape[i].value();
     const float side = i == 0 ? -1.0f : 1.0f;   // the left eye sits left of centre

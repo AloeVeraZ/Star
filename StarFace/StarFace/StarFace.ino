@@ -74,6 +74,7 @@ TwistDetector activeTwist;
 ShakeDetector shaker;
 TiltFlickDetector flicker;
 RockDetector rocker;
+StepDetector steps;
 bool touchStuck = false;   // a touch that never lifts is being ignored
 
 // ---- Fast motion sampling on the second core ----
@@ -421,6 +422,16 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   static uint32_t stillSince = 0;
   uint32_t stillFor = stillSince ? now - stillSince : 0;
   stillSince = heldStill ? (stillSince ? stillSince : now) : 0;
+  creature.setStillFor(stillFor);   // lying still for long: bored, then sleepy
+
+  // Carried around: footsteps bob the eyes and it watches the world go by.
+  steps.feed(a, shaker.strength, now);
+  creature.setCarried(steps.walking, steps.running, steps.step, steps.strength);
+  static bool wasWalking = false;
+  if (steps.walking != wasWalking && LOG_SHAKE)
+    Serial.println(steps.walking ? (steps.running ? "motion: running" : "motion: walking") : "motion: stopped walking");
+  wasWalking = steps.walking;
+  if (steps.walking && WALKING_KEEPS_AWAKE && !sleepPreparing) lastActivity = now;
 
   // Shaken while napping: the screen brightens with the eyes still shut, they
   // pop open, tumble dizzily, glare, then calm down. A gentler pick-up just
@@ -496,7 +507,12 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   } else if (jolt > PICKUP_MS2 && stillFor > 1200 && creature.mood() == Mood::IDLE) {
     // Bumped, nudged or picked up while it was calm: it notices.
     creature.notice(jolt / 8.0f, now);
-    if (stillFor > 15000) creature.reactPassive(Mood::SURPRISED, now, 600); // after a long rest it perks up
+    if (stillFor > 20000) {
+      // Picked up after a long rest: "oh!" then a happy hello.
+      react(Mood::SURPRISED, now, 520);
+      creature.queue(Mood::HAPPY, now + 540, 1200);
+      if (LOG_SHAKE) Serial.println("motion: picked up after a rest -> hello");
+    }
   }
 }
 
@@ -558,6 +574,22 @@ void handleMotion(uint32_t now) {
     lastActivity = now;
   }
   followWorld(a, g, now);
+  // Held up in front of someone: screen upright, in a hand (a little tremor,
+  // not perfectly still like on a stand), not being walked around. It pays
+  // attention: looks at them, happy blinks, and stays awake.
+  {
+    static float tremor = 0;
+    static uint32_t uprightSince = 0;
+    float n = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    float planar = sqrtf(a[0] * a[0] + a[1] * a[1]);
+    float spinNow = fabsf(g[0]) + fabsf(g[1]) + fabsf(g[2]);
+    tremor += (spinNow - tremor) * .1f;
+    bool upright = planar > 7.5f && fabsf(n - 9.81f) < 1.2f && spinNow < .8f && !steps.walking;
+    uprightSince = upright ? (uprightSince ? uprightSince : now) : 0;
+    bool held = uprightSince && now - uprightSince > 600;
+    creature.setHeldUp(held, now);
+    if (held && tremor > .03f && !sleepPreparing) lastActivity = now; // someone is holding it
+  }
   // A purposeful tilt held still is an interaction. A moving keychain should
   // not continually restart the idle timer while the wearer walks.
   static bool haveTiltAnchor = false;
@@ -664,8 +696,18 @@ void handleMotion(uint32_t now) {
         lastColdReaction = now;
       }
     } else coldSince = 0;
+    // Warm (a pocket, a hand, the sun): lazy and yawny now and then.
+    static uint32_t hotSince = 0, lastYawn = 0;
+    if (dieTempC > HOT_C && dieTempC < 90) {
+      if (!hotSince) hotSince = now;
+      if (now - hotSince > 10000 && now - lastYawn > 25000) {
+        creature.reactPassive(Mood::YAWN, now, 1900);
+        lastYawn = now;
+      }
+    } else hotSince = 0;
   }
-  // Idle eye motion and ordinary walking do not restart the activity timer.
+  // Idle eye motion does not restart the activity timer (walking does, when
+  // WALKING_KEEPS_AWAKE, and so does being held up in a hand).
 }
 
 void touchRegister(uint8_t reg, uint8_t value) {

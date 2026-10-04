@@ -49,6 +49,9 @@ class Eyes {
 
   // ---- Idle behaviour (look-arounds, micro-expressions, saccades) ----
   void setIdle(bool on) { idleOn = on; }
+  // How restless the idle looking-around is (default IDLE_LIVELINESS), and how
+  // often it looks back at you (0..1).
+  void setLiveliness(float live, float eyeContact = 0) { idle.liveliness = live; idle.eyeContact = eyeContact; }
 
   // ---- Lower-level controls (used by CreatureAnimator) ----
   // Lid opening on top of the expression: 0 shut, 1 the expression's own, >1 wider.

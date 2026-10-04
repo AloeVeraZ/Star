@@ -123,6 +123,11 @@ int main(int argc, char **argv) {
     { Sim sim; sim.wake(); sim.c.setTilt(.9f, .3f); sim.run(900); sim.shot(out + "/tilt_right_down.ppm"); }
     { Sim sim; sim.wake(); sim.c.setTilt(-.6f, -.8f); sim.run(900); sim.shot(out + "/tilt_left_up.ppm"); }
     { Sim sim; sim.wake(); sim.c.setFaceRoll(-.42f); sim.run(1500); sim.shot(out + "/rolled_level.ppm"); }
+    // Things it does by itself.
+    { Sim sim; sim.wake(); sim.c.react(Mood::CURIOUS, sim.now, 1700); sim.run(900); sim.shot(out + "/curious.ppm"); }
+    { Sim sim; sim.wake(); sim.c.react(Mood::YAWN, sim.now, 1900); sim.run(900); sim.shot(out + "/yawn.ppm"); }
+    { Sim sim; sim.wake(); sim.c.react(Mood::LOOK_AROUND, sim.now, 2300); sim.run(500); sim.shot(out + "/look_around.ppm"); }
+    { Sim sim; sim.wake(); sim.c.setCarried(true, false, false, 2); sim.run(900); sim.shot(out + "/walking.ppm"); }
     // Held upside down: worried, then cross, then furious.
     for (int ms : {800, 2600, 5000}) {
       Sim sim; sim.wake(); sim.c.setTilt(0, -.9f); sim.c.setUpsideDown(true, sim.now);

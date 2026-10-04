@@ -24,7 +24,8 @@ int main() {
   uint32_t now = 0, moodSince = 0;
   Mood lastMood = Mood::IDLE;
   const Mood moods[] = {Mood::HAPPY, Mood::SAD, Mood::ANGRY, Mood::DIZZY, Mood::SURPRISED, Mood::ANXIOUS, Mood::BOOP, Mood::PETTED,
-                        Mood::SWIPING, Mood::FOLLOWING, Mood::CONFUSED, Mood::SHY, Mood::SHIVER, Mood::LOVED, Mood::UPSIDE_DOWN};
+                        Mood::SWIPING, Mood::FOLLOWING, Mood::CONFUSED, Mood::SHY, Mood::SHIVER, Mood::LOVED, Mood::UPSIDE_DOWN,
+                        Mood::CURIOUS, Mood::YAWN, Mood::LOOK_AROUND};
   long frames = 0;
   bool held = false, upside = false;
   for (; now < 3u * 3600u * 1000u; now += 16 + (esp_random() % 30)) { // ~3 h, 20-50 FPS
@@ -33,8 +34,8 @@ int main() {
     dt = (now - prev) / 1000.0f;
     prev = now;
     uint32_t r100 = esp_random() % 1000;
-    if (r100 < 4) c.react(moods[esp_random() % 15], now, 400 + esp_random() % 2500);
-    else if (r100 < 6) c.reactPassive(moods[esp_random() % 15], now, 600);
+    if (r100 < 4) c.react(moods[esp_random() % 18], now, 400 + esp_random() % 2500);
+    else if (r100 < 6) c.reactPassive(moods[esp_random() % 18], now, 600);
     else if (r100 < 7) { c.impact((esp_random() % 41) - 20.0f, (esp_random() % 41) - 20.0f); c.react(Mood::DIZZY, now, DIZZY_ANIM_MS); }
     else if (r100 < 9) c.shake((esp_random() % 130) / 100.0f);
     else if (r100 < 10) c.startSleep(now, (esp_random() & 1) ? 0.0f : .3f);
@@ -54,6 +55,15 @@ int main() {
       else if (c.annoyance() > .35f) c.huff(c.annoyance(), now);
     }
     if (esp_random() % 200 == 0) c.sustain(Mood::PETTED, now, 1400); // rocking
+    {                                                    // carried, held up, lying still
+      bool walk = (now / 9000) % 3 == 1;
+      c.setCarried(walk, walk && (now / 4500) % 2, walk && esp_random() % 20 == 0, 3);
+      c.setHeldUp((now / 13000) % 2 == 1, now);
+      c.setStillFor((now / 7000) % 4 == 0 ? 30000 : 0);
+      c.setFaceRoll(.3f * sinf(now * .0003f));
+      c.setSwing(.2f * sinf(now * .002f), 0);
+      if (esp_random() % 3000 == 0) c.notice(.7f, now);
+    }
     if (held && esp_random() % 400 == 0) c.huff(c.annoyance(), now);
     c.setTilt(sinf(now * .0007f), cosf(now * .0011f));
     c.applyInertia((esp_random() % 21) - 10.0f, (esp_random() % 21) - 10.0f);

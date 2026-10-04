@@ -293,3 +293,59 @@ class WorldFollower {
   float base[3] = {0, -1, 0}, turned = 0;
   uint32_t lastAt = 0, fallSince = 0, spinAt = 0;
 };
+
+// ---- Being carried: walking and running steps ---------------------------------
+// Fed every render-loop sample. Each step is an up-and-down bounce (along
+// gravity); steady bounces 0.3-0.9 s apart are walking, quick hard ones
+// running. Shaking (sideways, faster, irregular) and turning it in the hand
+// (no bounce at all) are not steps.
+class StepDetector {
+ public:
+  bool walking = false, running = false;
+  bool step = false;            // this sample: a step landed
+  float strength = 0;           // how hard the last step landed, m/s^2
+
+  void feed(const float a[3], float shakeStrength, uint32_t now) {
+    step = false;
+    float dt = lastAt ? fminf(.1f, (now - lastAt) / 1000.0f) : .025f;
+    lastAt = now;
+    if (!seeded) { for (int i = 0; i < 3; ++i) down[i] = a[i]; avg = motion::len3(a); seeded = true; }
+    const float kg = motion::decay(dt, 1.0f);
+    for (int i = 0; i < 3; ++i) down[i] += (a[i] - down[i]) * kg;
+    const float dn = motion::len3(down);
+    // The bounce along gravity only: a sideways shake hardly moves it.
+    const float vertical = dn > 1.0f ? (a[0] * down[0] + a[1] * down[1] + a[2] * down[2]) / dn : 0.0f;
+    avg += (vertical - avg) * motion::decay(dt, .6f);
+    const float dyn = vertical - avg;
+    if (dyn < 0) armed = true;
+    peak = fmaxf(peak, dyn);
+    if (armed && dyn > STEP_MS2 && shakeStrength < 5.0f) {
+      armed = false;
+      uint32_t gap = lastStepAt ? now - lastStepAt : 0;
+      if (gap >= 300 && gap <= 900) {
+        // Regular rhythm: each gap within 40% of the running average.
+        if (meanGap == 0 || fabsf(float(gap) - meanGap) < .4f * meanGap) ++regular;
+        else regular = 1;
+        meanGap = meanGap == 0 ? gap : meanGap * .7f + gap * .3f;
+      } else if (gap > 900 || !lastStepAt) {
+        regular = 0;
+        meanGap = 0;
+      } else {
+        return;   // too quick to be a step (a shake or a knock): ignore it
+      }
+      lastStepAt = now;
+      strength = peak;
+      peak = 0;
+      step = regular >= 1;
+      if (regular >= 3) walking = true;
+    }
+    if (walking && now - lastStepAt > 1300) { walking = false; regular = 0; meanGap = 0; }
+    running = walking && meanGap > 0 && meanGap < 420 && strength > 4.0f;
+  }
+
+ private:
+  bool seeded = false, armed = false;
+  float avg = 9.81f, peak = 0, meanGap = 0, down[3] = {0, 0, 9.81f};
+  uint8_t regular = 0;
+  uint32_t lastAt = 0, lastStepAt = 0;
+};

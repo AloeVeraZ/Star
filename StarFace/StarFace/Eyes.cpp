@@ -233,7 +233,7 @@ void Eyes::compose() {
     float g1x = px * .55f + .34f * pr, g1y = py * .55f - .40f * pr;
     float g2x = px * .55f - .30f * pr, g2y = py * .55f + .36f * pr;
     f.glintR = GLINT_SIZE * pr * glintHide;
-    f.glint2R = .42f * GLINT_SIZE * pr * glintHide;
+    f.glint2R = .48f * GLINT_SIZE * pr * glintHide;
     // Everything inside the eye turns with the face.
     f.pupilX = px * rc - py * rs;  f.pupilY = px * rs + py * rc;
     f.glintX = g1x * rc - g1y * rs; f.glintY = g1x * rs + g1y * rc;
@@ -242,12 +242,14 @@ void Eyes::compose() {
     f.spiral = s.spiral;
     // Rosy cheeks, a little outward and under each eye; they grow in as they appear.
     const float blush = clampf(s.blush, 0.0f, 1.0f);
-    float cxo = -inward * .22f * rx, cyo = ry * .98f;
+    // They grow with the feeling (a small blush at rest, a big one when happy)
+    // and sit just below the eye, so they never hide behind it.
+    f.cheekRX = .50f * rx * (.55f + .45f * blush);
+    f.cheekRY = .19f * rx * (.55f + .45f * blush);
+    float cxo = -inward * .24f * rx, cyo = ry * 1.02f + f.cheekRY * .55f;
     f.cheekX = cxo * rc - cyo * rs;
     f.cheekY = cxo * rs + cyo * rc;
-    f.cheekRX = .52f * rx * (.6f + .4f * blush);
-    f.cheekRY = .20f * rx * (.6f + .4f * blush);
-    f.cheekAlpha = smoothstep(.05f, .6f, blush) * .85f;
+    f.cheekAlpha = smoothstep(.02f, .25f, blush) * .9f;
     f.spiralPhase = spiralPhase * side + i * 1.3f;   // the two spirals turn opposite ways
     fitToScreen(f);
   }

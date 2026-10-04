@@ -19,21 +19,22 @@
 static constexpr uint32_t EYE_COLOR = 0xF2ECFF;     // the eyes (and catch-lights): soft lilac white
 static constexpr uint32_t PUPIL_COLOR = 0x6526E0;   // the big irises, hearts and spirals: purple
 static constexpr bool ANTI_ALIAS = true;            // smooth vector edges (false: hard pixel edges)
-// Rosy cheeks appear under the eyes when it is happy, petted or in love (the
-// one extra colour; set CHEEK_BLUSH = false for strictly two colours).
+// Rosy cheeks under the eyes: a small blush at rest that grows when it is
+// happy, petted or in love, and fades when it is sad or cross (the one extra
+// colour; set CHEEK_BLUSH = false for strictly two colours).
 static constexpr bool CHEEK_BLUSH = true;
 static constexpr uint32_t CHEEK_COLOR = 0xFF7EB0;
 
 // ---- Eye size and layout, as fractions of the screen -------------------------
 // Everything scales with the display: sizes are fractions of the smaller
 // screen side, positions are relative to the screen centre.
-static constexpr float EYE_WIDTH = 0.38f;         // width of one oval eye at rest
-static constexpr float EYE_HEIGHT = 0.45f;        // height of one oval eye at rest
-static constexpr float EYE_SPACING = 0.46f;       // centre-to-centre distance between the eyes
-static constexpr float EYE_OFFSET_Y = 0.02f;      // whole face up (-) or down (+): a little low reads younger, cuter
-static constexpr float PUPIL_SIZE = 0.70f;        // iris radius, as a fraction of the eye's half width (big = friendly)
-static constexpr float PUPIL_CORE = 0.46f;        // black centre of the iris, as a fraction of it (0 = none)
-static constexpr float GLINT_SIZE = 0.34f;        // main catch-light radius, as a fraction of the iris (0 = none)
+static constexpr float EYE_WIDTH = 0.43f;         // width of one oval eye at rest
+static constexpr float EYE_HEIGHT = 0.49f;        // height of one oval eye at rest (nearly round = cuter)
+static constexpr float EYE_SPACING = 0.49f;       // centre-to-centre distance between the eyes
+static constexpr float EYE_OFFSET_Y = 0.03f;      // whole face up (-) or down (+): a little low reads younger, cuter
+static constexpr float PUPIL_SIZE = 0.72f;        // iris radius, as a fraction of the eye's half width (big = friendly)
+static constexpr float PUPIL_CORE = 0.44f;        // black centre of the iris, as a fraction of it (0 = none)
+static constexpr float GLINT_SIZE = 0.38f;        // main catch-light radius, as a fraction of the iris (0 = none)
 static constexpr float PUPIL_LIFE = 1.0f;         // pupil dilation and fixation tremor: 0 off .. 1.5 lively
 
 // ---- Movement limits ---------------------------------------------------------
@@ -61,7 +62,7 @@ static constexpr int SCREEN_WIDTH = 240;
 static constexpr int SCREEN_HEIGHT = 240;
 // A round panel hides its corners: the eyes are then kept inside a circle.
 static constexpr bool SCREEN_IS_ROUND = true;
-static constexpr float SAFE_MARGIN = 0.065f;      // keep the eyes this far (of screen) from the edge
+static constexpr float SAFE_MARGIN = 0.04f;       // keep the eyes this far (of screen) from the edge
 
 // ---- Shake & motion sensitivity (gravity-free acceleration, m/s^2; 9.8 = 1 g) --
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,

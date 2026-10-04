@@ -15,8 +15,8 @@ struct Preset {
 #define SAME(...) {__VA_ARGS__}, {__VA_ARGS__}
 
 const Preset PRESETS[EXPRESSION_COUNT] = {
-  // NEUTRAL: big soft round eyes, wide open and attentive.
-  {SAME(0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0), 3.2f, .80f, "neutral"},
+  // NEUTRAL: big soft round eyes, wide open and attentive, a faint blush.
+  {SAME(0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, .4f), 3.2f, .80f, "neutral"},
   // HAPPY: closed "^" arches, rosy cheeks; the eyes lift a little.
   {SAME(0, -.04f, 1.04f, .98f, 0, 0, 0, 0, 0, .30f, .44f, 0, 0, 0, 1), 5.0f, .50f, "happy"},
   // SAD: lids slant down to the outside, the eyes sink, pupils a touch bigger.

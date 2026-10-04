@@ -76,21 +76,25 @@ static constexpr float FACE_ANGLE_DEG = 0.0f;
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
 // raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
 // print each stroke's strength over serial while you tune.
-static constexpr float SHAKE_STROKE_MS2 = 8.5f;   // one strong stroke of a shake (~0.85 g beyond gravity)
-static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 4; // strong back-and-forth strokes for the dizzy spell
+static constexpr float SHAKE_STROKE_MS2 = 11.0f;  // one hard stroke of a shake (~1.1 g beyond gravity)
+static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 5; // hard back-and-forth strokes in a row for the dizzy spell
 static constexpr uint32_t SHAKE_GAP_MS = 500;     // longest pause between strokes of one shake
 static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
 static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for a full-strength rattle
 // Dizzy also triggers on sustained hard shaking, however the strokes line up:
-static constexpr float SHAKE_DIZZY_STRENGTH = 5.5f; // average shake strength (m/s^2 above noise)...
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 450; // ...kept up for this long
+static constexpr float SHAKE_DIZZY_STRENGTH = 7.5f; // average shake strength (m/s^2 above noise)...
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 550; // ...kept up for this long
 // Asleep it is much harder to wake: it takes a steady shake, kept up for
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking
 static constexpr float SHAKE_WAKE_STROKE_MS2 = 6.5f; // one stroke while waking it
 static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 4000; // ...for this long
 static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
-static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster than this counts as shaking
+static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // while asleep, rotation faster than this counts toward the wake shake
+// Turning, twisting or spinning it never makes it dizzy unless these are on:
+// awake, only a hard, rapid back-and-forth shake does.
+static constexpr bool TWIST_MAKES_DIZZY = false;  // three quick twists back and forth
+static constexpr bool SPIN_MAKES_DIZZY = false;   // spinning it around on the spot (SPIN_TURNS_FOR_DIZZY)
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
 
@@ -161,7 +165,7 @@ static constexpr uint32_t TOUCH_STUCK_MS = 15000;
 // Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it then naps
 // with dimmed, closed eyes after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
-static constexpr uint32_t IDLE_SLEEP_MS = 60000;  // power-save timeout when AUTO_DEEP_SLEEP
+static constexpr uint32_t IDLE_SLEEP_MS = 15000;  // power-save timeout when AUTO_DEEP_SLEEP
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
 static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;

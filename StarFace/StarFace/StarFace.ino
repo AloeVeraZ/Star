@@ -551,7 +551,7 @@ void followWorld(const float a[3], const float g[3], uint32_t now) {
     react(Mood::SURPRISED, now, 1300);
     if (LOG_SHAKE) Serial.println("motion: weightless (tossed or dropped)");
   }
-  if (world.spun) {
+  if (world.spun && SPIN_MAKES_DIZZY) {
     if (LOG_SHAKE) Serial.println("motion: spun around -> dizzy");
     creature.impact(linX + 8, linY);
     react(Mood::DIZZY, now, DIZZY_ANIM_MS);
@@ -566,7 +566,7 @@ void handleMotion(uint32_t now) {
   lastSample = now;
   float a[3], g[3];
   currentMotion(a, g);
-  if (activeTwist.feed(g, now)) {
+  if (activeTwist.feed(g, now) && TWIST_MAKES_DIZZY) {
     creature.impact(linX, linY);
     react(Mood::DIZZY, now, DIZZY_ANIM_MS); // tumbles, then glares
   } else if (activeTwist.progressing()) {

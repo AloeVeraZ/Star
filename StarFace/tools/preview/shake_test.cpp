@@ -68,7 +68,8 @@ static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
     if (ev == ShakeDetector::BUMP) ++seen.bumps;
     seen.strokes = *strokesSeen;
     if (det.rattle() > seen.maxRattle) seen.maxRattle = det.rattle();
-    if (ev == ShakeDetector::DIZZY || twist.feed(g, uint32_t(tms) + 1)) return int(tms);
+    bool twisted = twist.feed(g, uint32_t(tms) + 1) && TWIST_MAKES_DIZZY;
+    if (ev == ShakeDetector::DIZZY || twisted) return int(tms);
   }
   return -1;
 }
@@ -97,16 +98,19 @@ int main() {
     for (int p : {25, 45, 70}) {
       int s; int ms = runAwake(*new Shake(A, f), p, 3.0f, &s);
       printf(" %5d", ms);
-      // A firm shake (>= ~1.2 g) must make it dizzy within 2.5 s at any rate.
-      if (A >= 12 && (ms < 0 || ms > 2500)) { ++fails; printf("!"); }
+      // A heavy, rapid shake (>= ~1.8 g at 4+ Hz) must make it dizzy within
+      // 2.5 s at any loop rate; a moderate one (<= ~0.9 g) never.
+      if (A >= 18 && f >= 4 && (ms < 0 || ms > 2500)) { ++fails; printf("!"); }
+      if (A <= 9 && ms >= 0) { ++fails; printf("!"); }
     }
     printf("\n");
   }
   int s, ms;
   for (int p : {25, 45, 70}) {
     ms = runAwake(*new Shake(4, 4, 6.0f), p, 3.0f, &s);
-    printf("Wrist flick (mostly rotation, 6 rad/s), %d ms loop: dizzy at %d ms\n", p, ms);
-    if (ms < 0) ++fails;
+    printf("Turning it back and forth (mostly rotation, 6 rad/s), %d ms loop: %s\n", p,
+           ms < 0 ? "not dizzy" : "DIZZY  <-- WRONG (rotation alone must not)");
+    if (ms >= 0) ++fails;
   }
   struct { const char *name; Motion *m; } calm[] = {
     {"walking", new Walk(3.0f, 1.8f)}, {"brisk walking", new Walk(4.5f, 2.2f)},

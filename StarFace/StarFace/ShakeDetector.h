@@ -32,13 +32,17 @@ class ShakeDetector {
   float strokeMs2 = SHAKE_STROKE_MS2;
   uint8_t strokesForDizzy = SHAKE_STROKES_FOR_DIZZY;
   float dizzyStrength = SHAKE_DIZZY_STRENGTH;
+  // Rotation faster than this counts as shaking too (0: never; awake, only
+  // real back-and-forth motion counts, so turning it can't make it dizzy).
+  float spinRadS = 0;
 
   Event feed(const float lin[3], float spin, uint32_t now) {
     float dt = lastSampleAt ? fminf(.1f, (now - lastSampleAt) / 1000.0f) : .025f;
     lastSampleAt = now;
     float jolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
     // A wrist shake is partly rotation, so a fast spin counts as shaking too.
-    float excess = fmaxf(fmaxf(0.0f, jolt - SHAKE_NOISE_MS2), (spin - SHAKE_GYRO_RAD_S) * 2.5f);
+    float excess = fmaxf(0.0f, jolt - SHAKE_NOISE_MS2);
+    if (spinRadS > 0) excess = fmaxf(excess, (spin - spinRadS) * 2.5f);
     strength += (excess - strength) * (1.0f - expf(-dt / .35f));
 
     if (strokes && now - lastStrokeAt > SHAKE_GAP_MS) strokes = 0; // the shake paused
@@ -163,6 +167,7 @@ class ShakeWakeCheck {
     det.strokeMs2 = SHAKE_WAKE_STROKE_MS2;
     det.strokesForDizzy = 3;
     det.dizzyStrength = 3.5f;
+    det.spinRadS = SHAKE_GYRO_RAD_S;
   }
 
   uint32_t shakingFor(uint32_t now) const { return since ? now - since : 0; }

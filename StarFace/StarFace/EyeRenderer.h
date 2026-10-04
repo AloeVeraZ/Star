@@ -3,13 +3,10 @@
 #include "FaceConfig.h"
 
 // Final geometry of one eye for one frame, in screen pixels. Everything is
-// float, so shapes are computed with sub-pixel precision (smooth vector
-// outlines that move and morph continuously); only the final per-pixel
-// inside/outside test is rounded.
+// float, so shapes move and morph continuously in sub-pixel steps.
 struct EyeFrame {
   float cx, cy;            // eye centre
-  float hw, hh;            // half width / half height as drawn (after lids open or close)
-  float radius;            // corner radius
+  float rx, ry;            // the oval's half width / half height
   float tilt;              // rotation, radians: + lowers the inner (nose-side) end
   float bend;              // + both ends drop (a "^" arc), - they lift, px at the ends
   // Lids, in the eye's own frame (x toward the nose, y down, origin at the
@@ -19,34 +16,41 @@ struct EyeFrame {
   float botA, botB, botC;
   float lidRound;          // px of rounding where a lid meets the outline
   float pupilX, pupilY;    // pupil centre relative to the eye centre, screen axes
-  float pupilR;            // pupil radius
-  float pupilSquash;       // vertical pupil scale (flattens as the eye closes)
+  float pupilR;            // iris radius
+  float coreR;             // black centre of the iris (0: none)
+  float pupilSX, pupilSY;  // pupil scale: narrows when looking sideways (a round eyeball), squashes in a blink
+  float glintX, glintY, glintR;    // main catch-light, relative to the eye centre (0 radius: none)
+  float glint2X, glint2Y, glint2R; // small second catch-light
   float heart;             // 0..1 pupil -> heart
   float spiral;            // 0..1 pupil -> spiral
   float spiralPhase;       // spiral rotation, radians
+  float cheekX, cheekY;    // blush under the eye: centre relative to the eye centre...
+  float cheekRX, cheekRY;  // ...and half sizes (0: no blush)
+  float cheekAlpha;        // fades the blush in and out
   bool rightEye;           // mirrors "toward the nose" for the right eye
 };
 
 // Sends the rectangle [x0, x1) x [y0, y1) of the framebuffer to the panel.
 typedef void (*PushWindowFn)(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t *fb);
 
-// RGB565 (byte-swapped for the panel's SPI order) of the three colours that
-// can ever appear on screen.
+// Byte-swapped RGB565 (the panel's SPI order) of a 24-bit colour.
 constexpr uint16_t panel565(uint32_t rgb) {
   return uint16_t(((((rgb >> 19) & 0x1F) << 11) | (((rgb >> 10) & 0x3F) << 5) | ((rgb >> 3) & 0x1F)) << 8 |
                   ((((rgb >> 19) & 0x1F) << 11) | (((rgb >> 10) & 0x3F) << 5) | ((rgb >> 3) & 0x1F)) >> 8);
 }
 static constexpr uint16_t PIXEL_BACKGROUND = 0x0000;
 static constexpr uint16_t PIXEL_EYE = panel565(EYE_COLOR);
-static constexpr uint16_t PIXEL_ACCENT = panel565(ACCENT_COLOR);
+static constexpr uint16_t PIXEL_PUPIL = panel565(PUPIL_COLOR);
+static constexpr uint16_t PIXEL_CHEEK = panel565(CHEEK_COLOR);
 
-// Draws the eyes with exactly two colours on pure black. Each eye is a
-// signed-distance shape (a rounded box, bent and tilted, cut by curved lids
-// with rounded corners); the pupil is a rounded square that can morph into a
-// heart or a spinning spiral. Each pixel is tested at its centre and gets
-// exactly PIXEL_BACKGROUND, PIXEL_EYE or PIXEL_ACCENT: no blending, no
-// anti-aliased in-between colours. Frames are composed off-screen and only
-// the changed rectangle is pushed, so there is no flicker.
+// Draws the eyes as smooth vector shapes on pure black. Each eye is an oval
+// (tilted and bent as the expression asks) cut by two curved lids with rounded
+// corners; the pupil is a circle that narrows when it looks to the side and
+// can morph into a heart or a spinning spiral; two catch-lights sit on it.
+// Every edge is anti-aliased from its exact signed distance: a pixel the edge
+// passes through gets the matching blend of the two colours and black, so
+// curves look continuous instead of stepped. Frames are composed off-screen
+// and only the changed rectangle is pushed, so there is no flicker.
 class EyeRenderer {
  public:
   void begin(uint16_t *framebuffer, PushWindowFn pushFn);
@@ -63,5 +67,7 @@ class EyeRenderer {
   Box prev = {0, 0, -1, -1}, dirty = {0, 0, -1, -1};
 
   static Box bounds(const EyeFrame &e);
+  static Box cheekBounds(const EyeFrame &e);
   void renderEye(const EyeFrame &e, const Box &clip);
+  void renderCheek(const EyeFrame &e, const Box &clip);
 };

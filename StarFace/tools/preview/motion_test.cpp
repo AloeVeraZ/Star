@@ -74,8 +74,8 @@ struct Shake : Motion {    // back and forth, from t = .5 s
     a[1] += amp * .3f * sinf(w);
   }
 };
-// Turning about board axis `ax` (0 = x: tips the top toward/away, a[1] changes;
-// 1 = y: tips left/right, a[0] changes) by angle(t), from flat.
+// Tipping by angle(t), from flat, in the screen's frame: ax 1 tips the right
+// side down (a[0] changes), ax 0 tips the bottom edge down (a[1] changes).
 struct Turn : Motion {
   int ax;
   float (*angle)(float);
@@ -83,8 +83,9 @@ struct Turn : Motion {
   void at(float t, float a[3], float g[3]) override {
     rest(false, a, g);
     float th = angle(t), dt = .001f, rate = (angle(t + dt) - angle(t - dt)) / (2 * dt);
-    if (ax == 1) { a[0] = 9.81f * sinf(th); a[2] = 9.81f * cosf(th); g[1] = rate; }
-    else { a[1] = 9.81f * sinf(th); a[2] = 9.81f * cosf(th); g[0] = rate; }
+    // Positive angles tip the +axis side down, so "up" leans the other way.
+    if (ax == 1) { a[0] = -9.81f * sinf(th); a[2] = 9.81f * cosf(th); g[1] = rate; }
+    else { a[1] = -9.81f * sinf(th); a[2] = 9.81f * cosf(th); g[0] = rate; }
     for (int i = 0; i < 3; ++i) a[i] += (frand() - .5f) * .15f;
   }
 };
@@ -218,10 +219,10 @@ int main() {
   printf("Tilt flicks, rocking and twists (render-loop sampling 25-70 ms):\n");
   for (int p : {25, 45, 70}) {
     struct { const char *name; Motion *m; TiltFlickDetector::Dir want; } flicks[] = {
-      {"tip right and back", new Turn(1, flickPos), TiltFlickDetector::RIGHT},
-      {"tip left and back", new Turn(1, flickNeg), TiltFlickDetector::LEFT},
-      {"tip top-down and back", new Turn(0, flickPos), TiltFlickDetector::DOWN},
-      {"tip top-up and back", new Turn(0, flickNeg), TiltFlickDetector::UP},
+      {"tip the right side down and back", new Turn(1, flickPos), TiltFlickDetector::RIGHT},
+      {"tip the left side down and back", new Turn(1, flickNeg), TiltFlickDetector::LEFT},
+      {"tip the bottom down and back", new Turn(0, flickPos), TiltFlickDetector::DOWN},
+      {"tip the top down and back", new Turn(0, flickNeg), TiltFlickDetector::UP},
     };
     for (auto &f : flicks) {
       LoopResult r = runLoop(*f.m, 3.0f, p);
@@ -251,6 +252,112 @@ int main() {
       check(ok, what, buf);
     }
   }
+  printf("Following the world (screen frame: x right, y down, z into the screen):\n");
+  {
+    // Holds a pose (the "up" direction as the screen sees it) for a while, then
+    // another, sampled like the render loop; returns the follower.
+    auto hold = [](WorldFollower &w, const float up[3], float seconds, uint32_t &t, const float g[3] = nullptr) {
+      for (float s = 0; s < seconds; s += .025f) {
+        float a[3] = {up[0] * 9.81f, up[1] * 9.81f, up[2] * 9.81f}, z[3] = {0, 0, 0};
+        t += 25;
+        w.feed(a, g ? g : z, 0, t);
+      }
+    };
+    const float d = .4363f, sd = sinf(d), cd = cosf(d);  // 25 degrees
+    const float flat[3] = {0, 0, -1}, upright[3] = {0, -1, 0};
+    struct Case { const char *name; const float *from; float to[3]; char axis; float lo, hi; };
+    Case cases[] = {
+      {"flat, right side tipped down -> eyes look right", flat, {-sd, 0, -cd}, 'x', .7f, 1.01f},
+      {"flat, left side tipped down -> eyes look left", flat, {sd, 0, -cd}, 'x', -1.01f, -.7f},
+      {"flat, bottom edge tipped down -> eyes look down", flat, {0, -sd, -cd}, 'y', .7f, 1.01f},
+      {"flat, top edge tipped down -> eyes look up", flat, {0, sd, -cd}, 'y', -1.01f, -.7f},
+      {"upright, top tipped away (faces the sky) -> eyes look up", upright, {0, -cd, -sd}, 'y', -1.01f, -.7f},
+      {"upright, top tipped toward you -> eyes look down", upright, {0, -cd, sd}, 'y', .7f, 1.01f},
+      {"upright, turned 25 deg clockwise -> face rolls back", upright, {-sd, -cd, 0}, 'r', -.47f, -.40f},
+      {"upright, turned 25 deg anticlockwise -> face rolls back", upright, {sd, -cd, 0}, 'r', .40f, .47f},
+      {"flat, turned (no 'level' when flat) -> no roll", flat, {0, 0, -1}, 'r', -.05f, .05f},
+    };
+    for (Case &c : cases) {
+      WorldFollower w;
+      uint32_t t = 0;
+      hold(w, c.from, 2.0f, t);
+      hold(w, c.to, 1.0f, t);
+      float v = c.axis == 'x' ? w.tiltX : c.axis == 'y' ? w.tiltY : w.roll;
+      snprintf(buf, sizeof buf, "%c = %.2f", c.axis == 'r' ? 'r' : c.axis, v);
+      check(v >= c.lo && v <= c.hi, c.name, buf);
+    }
+    {
+      WorldFollower w;
+      uint32_t t = 0;
+      float tipped[3] = {-sd, 0, -cd};
+      hold(w, flat, 2.0f, t);
+      hold(w, tipped, 60.0f, t);
+      snprintf(buf, sizeof buf, "tilt %.2f", w.tiltX);
+      check(fabsf(w.tiltX) < .25f, "a tilt held still for a minute becomes the new normal", buf);
+    }
+    {
+      WorldFollower w;
+      uint32_t t = 0;
+      float g[3] = {0, 3.0f, 0};
+      hold(w, upright, 1.0f, t);
+      hold(w, upright, .5f, t, g);
+      snprintf(buf, sizeof buf, "swing %.2f", w.swingX);
+      check(w.swingX > .25f, "swung around (3 rad/s) -> eyes counter-move", buf);
+      hold(w, upright, 1.0f, t);
+      snprintf(buf, sizeof buf, "swing %.2f", w.swingX);
+      check(fabsf(w.swingX) < .02f, "...and ease back once it stops", buf);
+    }
+    {
+      WorldFollower w;
+      uint32_t t = 0;
+      int spins = 0;
+      for (float s = 0; s < 4; s += .025f) {
+        float a[3] = {0, -9.81f, 0}, g[3] = {0, 0, 5.0f};
+        t += 25;
+        w.feed(a, g, 0, t);
+        spins += w.spun;
+      }
+      snprintf(buf, sizeof buf, "%d dizzy spell(s)", spins);
+      check(spins >= 1 && spins <= 3, "spun on the spot (5 rad/s for 4 s) -> dizzy", buf);
+      WorldFollower slow;
+      spins = 0;
+      for (float s = 0; s < 4; s += .025f) {
+        float a[3] = {0, -9.81f, 0}, g[3] = {0, 0, 1.5f};
+        t += 25;
+        slow.feed(a, g, 0, t);
+        spins += slow.spun;
+      }
+      snprintf(buf, sizeof buf, "%d dizzy spell(s)", spins);
+      check(spins == 0, "turned slowly (1.5 rad/s) -> not dizzy", buf);
+    }
+    {
+      WorldFollower w;
+      uint32_t t = 0;
+      int tosses = 0;
+      for (float s = 0; s < 2; s += .025f) {
+        bool air = s > 1.0f && s < 1.3f;
+        float a[3] = {0, air ? -.5f : -9.81f, 0}, g[3] = {0, 0, 0};
+        t += 25;
+        w.feed(a, g, 0, t);
+        tosses += w.weightless;
+      }
+      snprintf(buf, sizeof buf, "%d", tosses);
+      check(tosses == 1, "tossed (0.3 s in the air) -> startled once", buf);
+      WorldFollower walk;
+      Walk wm(8.0f, 2.8f);
+      tosses = 0;
+      for (float s = 0; s < 20; s += .025f) {
+        float a[3], g[3];
+        wm.at(s, a, g);
+        t += 25;
+        walk.feed(a, g, 0, t);
+        tosses += walk.weightless;
+      }
+      snprintf(buf, sizeof buf, "%d", tosses);
+      check(tosses == 0, "running for 20 s -> never 'weightless'", buf);
+    }
+  }
+
   printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASSED", fails, fails == 1 ? "" : "s");
   return fails ? 1 : 0;
 }

@@ -1,11 +1,12 @@
 // Stress test: drives CreatureAnimator + Eyes + EyeRenderer with hours of
 // random input (touches, swipes, shakes, sleep/wake, direct expression and
 // gaze calls, tilt) and checks for invalid geometry, out-of-screen drawing,
-// moods that never end, and any pixel outside the two-colour palette.
+// moods that never end, and any pixel that is not a blend of the palette.
 // Build with sanitizers:  see README.md
 #include <math.h>
 #include <stdio.h>
 #include "EyeRenderer.h"
+#include "palette.h"
 #include "Eyes.h"
 #include "CreatureAnimator.h"
 
@@ -60,15 +61,15 @@ int main() {
     c.update(dt, now);
     const EyeFrame *g = eyes.frames();
     for (int i = 0; i < 2; ++i) {
-      const float v[] = {g[i].cx, g[i].cy, g[i].hw, g[i].hh, g[i].radius, g[i].tilt, g[i].bend,
+      const float v[] = {g[i].cx, g[i].cy, g[i].rx, g[i].ry, g[i].tilt, g[i].bend,
                          g[i].topA, g[i].topB, g[i].topC, g[i].botA, g[i].botB, g[i].botC,
-                         g[i].lidRound, g[i].pupilX, g[i].pupilY, g[i].pupilR, g[i].pupilSquash,
+                         g[i].lidRound, g[i].pupilX, g[i].pupilY, g[i].pupilR, g[i].pupilSX, g[i].pupilSY, g[i].glintX, g[i].glintY, g[i].glintR,
                          g[i].heart, g[i].spiral, g[i].spiralPhase};
       for (float f : v) CHECK(isfinite(f), "t=%u eye %d non-finite value", now, i);
-      CHECK(g[i].hw > 5 && g[i].hw < EYE_HALF_WIDTH * 1.25f, "t=%u eye %d hw=%.1f", now, i, g[i].hw);
-      CHECK(g[i].hh > 1 && g[i].hh < EYE_HALF_HEIGHT * 1.25f, "t=%u eye %d hh=%.1f", now, i, g[i].hh);
+      CHECK(g[i].rx > 5 && g[i].rx < EYE_HALF_WIDTH * 1.25f, "t=%u eye %d rx=%.1f", now, i, g[i].rx);
+      CHECK(g[i].ry > 5 && g[i].ry < EYE_HALF_HEIGHT * 1.25f, "t=%u eye %d ry=%.1f", now, i, g[i].ry);
       // The eye's far corner stays on the round screen.
-      float dx = fabsf(g[i].cx - SCREEN_CX) + g[i].hw * .8f, dy = fabsf(g[i].cy - SCREEN_CY) + g[i].hh * .8f;
+      float dx = fabsf(g[i].cx - SCREEN_CX) + g[i].rx * .7f, dy = fabsf(g[i].cy - SCREEN_CY) + g[i].ry * .7f;
       CHECK(sqrtf(dx * dx + dy * dy) < SCREEN_RADIUS, "t=%u eye %d reaches off-screen", now, i);
     }
     CHECK(c.backlight() >= 0 && c.backlight() <= 1.0001f, "t=%u backlight %.2f", now, c.backlight());
@@ -82,8 +83,8 @@ int main() {
       if (esp_random() % 40 == 0) r.invalidate();
       r.compose(g);
       for (int p = 0; p < SCREEN_WIDTH * SCREEN_HEIGHT; ++p)
-        if (fb[p] != PIXEL_BACKGROUND && fb[p] != PIXEL_EYE && fb[p] != PIXEL_ACCENT) {
-          CHECK(false, "t=%u pixel %d is not one of the three allowed colours", now, p);
+        if (!inPalette(fb[p])) {
+          CHECK(false, "t=%u pixel %d is not a blend of black and the two eye colours", now, p);
           break;
         }
     }

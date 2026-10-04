@@ -28,6 +28,10 @@ class ShakeDetector {
 
   float strength = 0;   // m/s^2 above SHAKE_NOISE_MS2, smoothed (~0.35 s)
   uint8_t strokes = 0;  // strokes in the current shake
+  // Thresholds (awake defaults; the wake-from-sleep check uses its own).
+  float strokeMs2 = SHAKE_STROKE_MS2;
+  uint8_t strokesForDizzy = SHAKE_STROKES_FOR_DIZZY;
+  float dizzyStrength = SHAKE_DIZZY_STRENGTH;
 
   Event feed(const float lin[3], float spin, uint32_t now) {
     float dt = lastSampleAt ? fminf(.1f, (now - lastSampleAt) / 1000.0f) : .025f;
@@ -46,7 +50,7 @@ class ShakeDetector {
       ev = BUMP;
     }
     if (strength > 1.0f || jolt > SHAKE_NOISE_MS2 * 1.5f) lastBusyAt = now;
-    if (jolt > SHAKE_STROKE_MS2 && (!lastStrokeAt || now - lastStrokeAt > 60)) {
+    if (jolt > strokeMs2 && (!lastStrokeAt || now - lastStrokeAt > 60)) {
       float dot = lin[0] * dir[0] + lin[1] * dir[1] + lin[2] * dir[2];
       if (strokes == 0 || dot < 0) {
         ++strokes;
@@ -55,9 +59,9 @@ class ShakeDetector {
         if (ev != BUMP) ev = strokes == 2 ? STARTLE : STROKE;
       }
     }
-    strongSince = strength > SHAKE_DIZZY_STRENGTH ? (strongSince ? strongSince : now) : 0;
+    strongSince = strength > dizzyStrength ? (strongSince ? strongSince : now) : 0;
     bool sustained = strongSince && now - strongSince >= SHAKE_DIZZY_HOLD_MS;
-    if (strokes >= SHAKE_STROKES_FOR_DIZZY || sustained) {
+    if (strokes >= strokesForDizzy || sustained) {
       strokes = 0;
       strongSince = 0;
       return DIZZY;
@@ -154,6 +158,12 @@ class ShakeWakeCheck {
  public:
   uint8_t jolts = 0;      // strokes in the current run (for the log)
   float lastJolt = 0;
+
+  ShakeWakeCheck() {      // the sleep-time thresholds (unchanged by awake tuning)
+    det.strokeMs2 = SHAKE_WAKE_STROKE_MS2;
+    det.strokesForDizzy = 3;
+    det.dizzyStrength = 3.5f;
+  }
 
   uint32_t shakingFor(uint32_t now) const { return since ? now - since : 0; }
   bool stopped(uint32_t now) const { return !since && lastOnAt && now - lastOnAt > 1000; }

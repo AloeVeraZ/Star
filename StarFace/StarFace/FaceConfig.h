@@ -10,36 +10,44 @@
 //  EYES: the parameters you are most likely to want to change.
 // ============================================================================
 
-// ---- The two eye colours ---------------------------------------------------
-// The background is always pure black. The eyes use exactly these two colours
-// and nothing else: no gradients, glows, shading or anti-aliased edge pixels.
+// ---- Colours ----------------------------------------------------------------
+// Pure black background. Each eye is EYE_COLOR with a big PUPIL_COLOR pupil
+// and catch-lights in EYE_COLOR. Edges are anti-aliased (each edge pixel is a
+// blend of these two colours and black, nothing else), which is what makes
+// the shapes look like smooth vector art instead of pixel steps.
 // 24-bit 0xRRGGBB values (shown as the nearest RGB565 colour on the panel).
-static constexpr uint32_t EYE_COLOR = 0x8A2EFF;     // primary: the eye shapes
-static constexpr uint32_t ACCENT_COLOR = 0xF2EAFF;  // secondary: pupils and accents (hearts, spirals)
+static constexpr uint32_t EYE_COLOR = 0xF2ECFF;     // the eyes (and catch-lights): soft lilac white
+static constexpr uint32_t PUPIL_COLOR = 0x6526E0;   // the big irises, hearts and spirals: purple
+static constexpr bool ANTI_ALIAS = true;            // smooth vector edges (false: hard pixel edges)
+// Rosy cheeks appear under the eyes when it is happy, petted or in love (the
+// one extra colour; set CHEEK_BLUSH = false for strictly two colours).
+static constexpr bool CHEEK_BLUSH = true;
+static constexpr uint32_t CHEEK_COLOR = 0xFF7EB0;
 
 // ---- Eye size and layout, as fractions of the screen -------------------------
 // Everything scales with the display: sizes are fractions of the smaller
 // screen side, positions are relative to the screen centre.
-static constexpr float EYE_WIDTH = 0.35f;         // width of one eye at rest
-static constexpr float EYE_HEIGHT = 0.48f;        // height of one eye at rest
-static constexpr float EYE_SPACING = 0.44f;       // centre-to-centre distance between the eyes
-static constexpr float EYE_OFFSET_Y = -0.01f;     // whole face up (-) or down (+) from the centre
-static constexpr float EYE_ROUNDNESS = 0.46f;     // corners: 0 sharp box .. 1 fully rounded capsule
-static constexpr float PUPIL_SIZE = 0.43f;        // pupil radius, as a fraction of the eye's half width
-static constexpr float PUPIL_ROUNDNESS = 0.70f;   // 1 = circle, lower = squarer (robotic)
+static constexpr float EYE_WIDTH = 0.38f;         // width of one oval eye at rest
+static constexpr float EYE_HEIGHT = 0.45f;        // height of one oval eye at rest
+static constexpr float EYE_SPACING = 0.46f;       // centre-to-centre distance between the eyes
+static constexpr float EYE_OFFSET_Y = 0.02f;      // whole face up (-) or down (+): a little low reads younger, cuter
+static constexpr float PUPIL_SIZE = 0.70f;        // iris radius, as a fraction of the eye's half width (big = friendly)
+static constexpr float PUPIL_CORE = 0.46f;        // black centre of the iris, as a fraction of it (0 = none)
+static constexpr float GLINT_SIZE = 0.34f;        // main catch-light radius, as a fraction of the iris (0 = none)
+static constexpr float PUPIL_LIFE = 1.0f;         // pupil dilation and fixation tremor: 0 off .. 1.5 lively
 
 // ---- Movement limits ---------------------------------------------------------
-static constexpr float MAX_PUPIL_MOVE = 0.62f;    // 0..1: how far a pupil may roam inside its eye
-static constexpr float MAX_EYE_MOVE_X = 0.040f;   // how far the whole eyes follow the gaze, of screen
-static constexpr float MAX_EYE_MOVE_Y = 0.030f;
+static constexpr float MAX_PUPIL_MOVE = 0.85f;    // 0..1: how far an iris may roam inside its eye
+static constexpr float MAX_EYE_MOVE_X = 0.055f;   // how far the whole eyes follow the gaze, of screen
+static constexpr float MAX_EYE_MOVE_Y = 0.045f;
 static constexpr float MAX_EXPRESSION_EXPANSION = 1.15f; // largest size any expression may reach
 
 // ---- Animation -----------------------------------------------------------------
 static constexpr float ANIMATION_SPEED = 1.0f;    // >1 snappier, <1 lazier (0.6 .. 1.6)
 static constexpr float EXPRESSION_INTENSITY = 1.0f; // 0.5 subtle .. 1.3 exaggerated
 static constexpr float EXPRESSION_BLEND_SPEED = 1.0f; // how quickly one expression morphs into the next
-static constexpr uint16_t BLINK_CLOSE_MS = 70;    // blink speed: a fast close...
-static constexpr uint16_t BLINK_OPEN_MS = 150;    // ...and a slightly slower open
+static constexpr uint16_t BLINK_CLOSE_MS = 75;    // blink speed: a fast close...
+static constexpr uint16_t BLINK_OPEN_MS = 160;    // ...and a slower open
 static constexpr uint32_t BLINK_MIN_MS = 2200;    // blink frequency: time between blinks
 static constexpr uint32_t BLINK_MAX_MS = 6500;
 static constexpr float DOUBLE_BLINK_CHANCE = 0.12f;
@@ -59,22 +67,39 @@ static constexpr float SAFE_MARGIN = 0.065f;      // keep the eyes this far (of 
 // Lower SHAKE_STROKE_MS2 / SHAKE_STROKES_FOR_DIZZY if shaking feels too hard,
 // raise them if walking or bumps set it off. Set LOG_SHAKE in StarFace.ino to
 // print each stroke's strength over serial while you tune.
-static constexpr float SHAKE_STROKE_MS2 = 6.5f;   // one stroke of a shake (~0.65 g beyond gravity)
-static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 3; // back-and-forth strokes for the dizzy spell
+static constexpr float SHAKE_STROKE_MS2 = 8.5f;   // one strong stroke of a shake (~0.85 g beyond gravity)
+static constexpr uint8_t SHAKE_STROKES_FOR_DIZZY = 4; // strong back-and-forth strokes for the dizzy spell
 static constexpr uint32_t SHAKE_GAP_MS = 500;     // longest pause between strokes of one shake
 static constexpr float SHAKE_NOISE_MS2 = 3.0f;    // motion below this never rattles the eyes
 static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for a full-strength rattle
 // Dizzy also triggers on sustained hard shaking, however the strokes line up:
-static constexpr float SHAKE_DIZZY_STRENGTH = 3.5f; // average shake strength (m/s^2 above noise)...
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 400; // ...kept up for this long
+static constexpr float SHAKE_DIZZY_STRENGTH = 5.5f; // average shake strength (m/s^2 above noise)...
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 450; // ...kept up for this long
 // Asleep it is much harder to wake: it takes a steady shake, kept up for
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking
+static constexpr float SHAKE_WAKE_STROKE_MS2 = 6.5f; // one stroke while waking it
 static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 4000; // ...for this long
 static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // wrist-flick rotation faster than this counts as shaking
 static constexpr float BUMP_MS2 = 9.0f;           // a single knock: recoil and a startled look
 static constexpr float PICKUP_MS2 = 2.2f;         // picked up / moved: ends a nap
+
+// ---- Following the world (motion sensor) --------------------------------------
+// The eyes look toward the low side when it is tilted (any direction), the
+// face rolls to stay level when the star is turned, the eyes counter-move to
+// keep looking at you when it is swung around, and a tilt held still for
+// TILT_SETTLE_S becomes its new normal. If tilting makes the eyes look the
+// wrong way, try IMU_ROTATION = 1, 2 or 3 (how the sensor sits relative to
+// the screen, in quarter turns); that fixes every motion reaction at once.
+static constexpr uint8_t IMU_ROTATION = 0;
+static constexpr float TILT_GAZE = 2.2f;          // gaze per radian of tilt (~25 degrees = a full look)
+static constexpr float TILT_SETTLE_S = 20.0f;     // a tilt held still this long becomes the new normal
+static constexpr bool FACE_STAYS_LEVEL = true;    // roll the face against the star's turning
+static constexpr float FACE_ROLL_MAX = 0.75f;     // radians (~43 degrees), so upside down still reads as upside down
+static constexpr float SWING_GAZE = 0.12f;        // eye counter-move per rad/s of swing
+static constexpr float SPIN_TURNS_FOR_DIZZY = 1.5f; // spinning it around on the spot this many turns: dizzy
+static constexpr uint32_t FREEFALL_MS = 90;       // weightless this long (tossed or dropped): startled
 
 // ---- Motion gestures (everything also works without the touch screen) -------
 // Knock on the case 1/2/3/4 times = tap the screen 1/2/3/4 times; tip it one

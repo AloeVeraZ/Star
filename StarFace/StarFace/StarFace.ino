@@ -19,7 +19,7 @@
 // Star Face for Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round).
 // Hardware, input and power live here. The eyes are an animation system of
 // their own (Eyes: expressions, gaze, blinks, idle behaviour; EyeRenderer:
-// two-colour drawing); CreatureAnimator turns touch, motion and time into
+// anti-aliased vector drawing); CreatureAnimator turns touch, motion and time into
 // moods that drive them. Eye size, colours, animation feel, shake sensitivity
 // and sleep timing are tuned in FaceConfig.h.
 //
@@ -302,13 +302,20 @@ void handleTouch(uint32_t now) {
   }
 }
 
+// Reads the IMU in m/s^2 and rad/s, turned into the screen's frame: x to the
+// right, y down, z into the screen (the sensor's own y points up the board
+// and its z out of the screen; IMU_ROTATION corrects other mountings).
 void readMotion(float a[3], float g[3]) {
-  QMI8658_read_xyz(a, g, nullptr);
+  float ra[3], rg[3];
+  QMI8658_read_xyz(ra, rg, nullptr);
   // Waveshare's driver reports mg and degrees/s.
-  for (int i = 0; i < 3; ++i) {
-    a[i] *= 0.00980665f;
-    g[i] *= 0.017453293f;
+  float ax = ra[0] * 0.00980665f, ay = -ra[1] * 0.00980665f, gx = rg[0] * 0.017453293f, gy = -rg[1] * 0.017453293f;
+  for (uint8_t r = 0; r < (IMU_ROTATION & 3); ++r) {
+    float t = ax; ax = -ay; ay = t;
+    t = gx; gx = -gy; gy = t;
   }
+  a[0] = ax; a[1] = ay; a[2] = -ra[2] * 0.00980665f;
+  g[0] = gx; g[1] = gy; g[2] = -rg[2] * 0.017453293f;
 }
 
 // Waveshare's QMI8658_config_acc() builds the accelerometer's low-pass
@@ -486,9 +493,10 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
     // sampler): the eyes recoil and it looks startled.
     creature.impact(lin[0] * .6f, lin[1] * .6f);
     creature.reactPassive(Mood::SURPRISED, now, 520);
-  } else if (jolt > PICKUP_MS2 && stillFor > 15000) {
-    // Picked up after resting for a while: it perks up and looks around.
-    creature.reactPassive(Mood::SURPRISED, now, 600);
+  } else if (jolt > PICKUP_MS2 && stillFor > 1200 && creature.mood() == Mood::IDLE) {
+    // Bumped, nudged or picked up while it was calm: it notices.
+    creature.notice(jolt / 8.0f, now);
+    if (stillFor > 15000) creature.reactPassive(Mood::SURPRISED, now, 600); // after a long rest it perks up
   }
 }
 
@@ -509,6 +517,31 @@ void handleKnocks(uint32_t now) {
   }
 }
 
+// The eyes follow the world: they look toward the low side when it is
+// tilted, the face rolls to stay level when it is turned, the eyes
+// counter-move to keep looking at you when it is swung, and spinning it
+// around, tossing it or bumping it get their own reactions. a and g are in the
+// screen's frame (see readMotion).
+void followWorld(const float a[3], const float g[3], uint32_t now) {
+  static WorldFollower world;
+  world.feed(a, g, shaker.strength, now);
+  creature.setTilt(world.tiltX, world.tiltY);
+  creature.setFaceRoll(FACE_STAYS_LEVEL ? world.roll : 0.0f);
+  creature.setSwing(world.swingX, world.swingY);
+  tiltX = world.tiltX;
+  tiltY = world.tiltY;
+  if (world.weightless && !sleepPreparing) {
+    creature.impact(0, 12);                 // the eyes float up
+    react(Mood::SURPRISED, now, 1300);
+    if (LOG_SHAKE) Serial.println("motion: weightless (tossed or dropped)");
+  }
+  if (world.spun) {
+    if (LOG_SHAKE) Serial.println("motion: spun around -> dizzy");
+    creature.impact(linX + 8, linY);
+    react(Mood::DIZZY, now, DIZZY_ANIM_MS);
+  }
+}
+
 void handleMotion(uint32_t now) {
   if (!imuReady) return;
   handleKnocks(now);
@@ -524,11 +557,7 @@ void handleMotion(uint32_t now) {
     // A partial deliberate twist counts; one incidental swing does not.
     lastActivity = now;
   }
-  // Accelerometer is the stable source of tilt. Low pass filtering keeps eyes calm.
-  // If the eyes look the wrong way when tilted, reverse the sign of a[0] or a[1].
-  tiltX += (constrain(a[0] / 7.0f, -1.0f, 1.0f) - tiltX) * .12f;
-  tiltY += (constrain(a[1] / 7.0f, -1.0f, 1.0f) - tiltY) * .12f;
-  creature.setTilt(tiltX, tiltY);
+  followWorld(a, g, now);
   // A purposeful tilt held still is an interaction. A moving keychain should
   // not continually restart the idle timer while the wearer walks.
   static bool haveTiltAnchor = false;
@@ -562,7 +591,7 @@ void handleMotion(uint32_t now) {
   // down, it goes to sleep (a way to switch it off without the touch screen).
   static uint32_t faceDownSince = 0;
   static bool faceDownReacted = false;
-  if (a[2] < -7.5f && fabsf(g[0]) + fabsf(g[1]) < 1.2f) {
+  if (a[2] > 7.5f && fabsf(g[0]) + fabsf(g[1]) < 1.2f) {   // screen facing the floor
     if (!faceDownSince) faceDownSince = now;
     if (!faceDownReacted && now - faceDownSince > 500) {
       react(Mood::CONFUSED, now, 1000);

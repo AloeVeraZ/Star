@@ -38,7 +38,8 @@ class GazeController {
     sacX.update(dt, 16, .85f);
     sacY.update(dt, 16, .85f);
 
-    const float f = 4.6f * GAZE_SPEED * speed * (1.0f - .45f * drowsy);
+    // Quick, snappy saccades: the pupils jump and settle; the eyes follow softer.
+    const float f = 5.6f * GAZE_SPEED * speed * (1.0f - .45f * drowsy);
     for (int i = 0; i < 2; ++i) {
       float fi = i ? f * .88f : f;
       pupX[i].target = tx; pupY[i].target = ty;
@@ -63,7 +64,7 @@ class GazeController {
 
  private:
   anim::Spring pupX[2], pupY[2], travX[2], travY[2], sacX, sacY;
-  float tx = 0, ty = 0, speed = 1, zeta = .68f;
+  float tx = 0, ty = 0, speed = 1, zeta = .72f;
   bool sacOn = true, tense = false;
   uint32_t nextSaccadeAt = 0;
 };

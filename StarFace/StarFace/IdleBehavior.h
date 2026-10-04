@@ -62,8 +62,8 @@ class IdleBehavior {
     float r = frand(), nx, ny;
     fast = false;
     const float live = anim::clampf(IDLE_LIVELINESS, 0.0f, 1.5f);
-    if (r < .10f + .3f * (1.0f - live)) {
-      nx = ny = 0;
+    if (r < .22f + .3f * (1.0f - live)) {
+      nx = ny = 0;            // looks back at you often: eye contact feels friendly
     } else if (r < .52f) {
       float a = frand(0, anim::TAU_F), d = frand(.10f, .30f);
       nx = gazeX * .6f + cosf(a) * d;

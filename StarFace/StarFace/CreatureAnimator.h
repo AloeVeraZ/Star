@@ -44,7 +44,14 @@ class CreatureAnimator {
   bool asleep() const { return current == Mood::SLEEPY; }
 
   // ---- inputs ----
+  // How it is tilted (-1..1 each way, toward the low side): the eyes look there.
   void setTilt(float x, float y) { tiltX = x; tiltY = y; }
+  // Roll of the face to stay level (radians), and the eyes' counter-move while
+  // the star is swung (-1..1), from the motion sensor.
+  void setFaceRoll(float r) { faceRoll = r; }
+  void setSwing(float x, float y) { swingX = x; swingY = y; }
+  // A bump or a pick-up it noticed while calm: a quick widen and blink, no mood change.
+  void notice(float level, uint32_t now);
   void setPointer(float x, float y, uint32_t now);
   // A finger is on the screen. The longer it stays, the angrier it gets.
   void setPointerHeld(bool held, uint32_t now) {
@@ -105,7 +112,9 @@ class CreatureAnimator {
   float scriptGX = 0, scriptGY = 0, scriptGazeSpeed = 1;
 
   // Inputs and effects
-  float tiltX = 0, tiltY = 0;
+  float tiltX = 0, tiltY = 0, faceRoll = 0, swingX = 0, swingY = 0;
+  uint32_t lastNoticeAt = 0;
+  bool ownedGaze = false;
   float pointerX = 0, pointerY = 0;
   uint32_t pointerAt = 0, holdSince = 0;
   bool pointerHeld = false, upsideDown = false;

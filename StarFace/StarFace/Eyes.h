@@ -74,6 +74,14 @@ class Eyes {
   }
   void kickShape(int eye, EyeShapeField field, float velocity) { shape[eye].kick(field, velocity); }
   void setSpiralSpeed(float radPerSec) { spiralSpeed = radPerSec; }
+  // Rolls the whole face (radians, + clockwise), e.g. to stay level with the
+  // ground while the star is turned; it follows on a soft, wobbly spring.
+  void setFaceRoll(float radians) { rollS.target = radians; }
+  // Added straight onto the gaze (-1..1), e.g. the eyes counter-moving while
+  // the star swings, so they keep looking at you.
+  void setLookOffset(float x, float y) { offX = x; offY = y; }
+  // Pupil size on top of the expression: >1 wide and interested, <1 tight.
+  void setPupilDilation(float d) { dilateTarget = d; }
   bool blinking() const { return blinker.active(); }
 
   // ---- Frame ----
@@ -108,6 +116,8 @@ class Eyes {
   float forceX = 0, forceY = 0;
   float jit[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
   float spiralSpeed = 7.0f, spiralPhase = 0;
+  anim::Spring rollS, dilateS;
+  float offX = 0, offY = 0, dilateTarget = 1;
 
   EyeShape targetShape(int eye) const;
   void compose();

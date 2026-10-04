@@ -20,7 +20,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.normpath(os.path.join(here, "..", ".."))
 
 names = ["idle", "happy", "sad", "angry", "surprised", "expr_sleepy",
-         "expr_squint", "expr_curious", "confused", "loved", "dizzy", "sleeping"]
+         "tilt_right_down", "rolled_level", "confused", "loved", "dizzy", "sleeping"]
 subprocess.run([sys.executable, os.path.join(here, "sheet.py"),
                 os.path.join(root, "face-expressions.png"), "--scale", "1", "--cols", "6"]
                + [os.path.join(frames, n + ".ppm") for n in names], check=True)

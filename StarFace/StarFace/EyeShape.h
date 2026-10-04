@@ -11,9 +11,9 @@
 struct EyeShape {
   float x, y;           // offset from the eye's home position, in half-widths / half-heights
   float width, height;  // size multipliers (1 = rest)
-  float round;          // corner roundness multiplier (1 = EYE_ROUNDNESS)
   float tilt;           // rotation of the whole eye, radians (+ inner end lower)
   float bend;           // arcs the eye: + ends drop (a happy "^"), - ends lift ("U"), in half-heights
+  // The eye is an oval; lids are black curves that slide over it.
   float topLid;         // 0..1: how far the upper lid comes down at the middle
   float topSlope;       // upper lid slant: + lower toward the nose (angry), - higher (sad)
   float topCurve;       // + the upper lid sags in the middle, - it arches
@@ -22,6 +22,7 @@ struct EyeShape {
   float pupil;          // pupil size multiplier (0 hides it)
   float heart;          // 0..1: the pupil becomes a heart
   float spiral;         // 0..1: the pupil becomes a spinning spiral
+  float blush;          // 0..1: rosy cheeks under the eyes
 };
 
 namespace eyeshape {
@@ -32,7 +33,7 @@ inline float *fields(EyeShape &s) { return reinterpret_cast<float *>(&s); }
 inline const float *fields(const EyeShape &s) { return reinterpret_cast<const float *>(&s); }
 
 // The calm, symmetric rest shape.
-constexpr EyeShape NEUTRAL_SHAPE = {0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
+constexpr EyeShape NEUTRAL_SHAPE = {0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
 
 // a + (b - a) * t for every field.
 inline EyeShape mix(const EyeShape &a, const EyeShape &b, float t) {
@@ -49,6 +50,8 @@ inline EyeShape amplify(const EyeShape &s, float amount) {
 }
 
 } // namespace eyeshape
+
+static_assert(sizeof(EyeShape) == 15 * sizeof(float), "update RATE in ShapeSpring");
 
 // Every EyeShape field on its own damped spring: setting a new target morphs
 // the eye there smoothly, with acceleration, deceleration and (if damping is
@@ -79,12 +82,12 @@ class ShapeSpring {
   anim::Spring f[eyeshape::FIELDS];
   // Lids move a little quicker than the eye outline, pupils quicker still.
   static constexpr float RATE[eyeshape::FIELDS] = {
-    1, 1, 1, 1, .9f, .9f, .9f, 1.15f, 1.1f, 1.1f, 1.15f, 1.1f, 1.2f, .9f, 1.0f
+    1, 1, 1, 1, .9f, .9f, 1.15f, 1.1f, 1.1f, 1.15f, 1.1f, 1.2f, .9f, 1.0f, .7f
   };
 };
 
 // Field indices for ShapeSpring::kick.
 enum EyeShapeField : uint8_t {
-  ES_X, ES_Y, ES_WIDTH, ES_HEIGHT, ES_ROUND, ES_TILT, ES_BEND, ES_TOP, ES_TOP_SLOPE,
-  ES_TOP_CURVE, ES_BOTTOM, ES_BOTTOM_CURVE, ES_PUPIL, ES_HEART, ES_SPIRAL
+  ES_X, ES_Y, ES_WIDTH, ES_HEIGHT, ES_TILT, ES_BEND, ES_TOP, ES_TOP_SLOPE,
+  ES_TOP_CURVE, ES_BOTTOM, ES_BOTTOM_CURVE, ES_PUPIL, ES_HEART, ES_SPIRAL, ES_BLUSH
 };

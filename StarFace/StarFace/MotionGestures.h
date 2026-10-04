@@ -12,8 +12,9 @@
 //   Rocking      rock it gently side to side (like petting it)
 //
 // Inputs: acceleration including gravity (m/s^2) and rotation (rad/s), in the
-// board's axes. Directions are reported the same way the eyes follow tilt
-// (a[0] right, a[1] down), so if tilt gaze is set up right, these are too.
+// screen's frame (x right, y down; see readMotion in the sketch). Flick
+// directions name the side that was tipped down, the way the eyes look when
+// it is tilted, so if tilt gaze is set up right, these are too.
 
 namespace motion {
 inline float len3(const float v[3]) { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
@@ -147,8 +148,9 @@ class TiltFlickDetector {
     moving = false;
     stillSince = 0;   // needs a fresh still moment before the next flick
     if (far < FLICK_MIN_TILT_MS2) return NONE;
-    if (fabsf(mx) >= fabsf(my)) return mx > 0 ? RIGHT : LEFT;
-    return my > 0 ? DOWN : UP;
+    // "Up" (as the sensor reads it) moved away from the side that went down.
+    if (fabsf(mx) >= fabsf(my)) return mx < 0 ? RIGHT : LEFT;
+    return my < 0 ? DOWN : UP;
   }
 
  private:
@@ -217,4 +219,77 @@ class RockDetector {
   } axis[2];
   float bounce = 0;
   uint32_t last = 0;
+};
+
+// ---- Following the world: tilt, roll, swing, spin and toss ------------------
+// Fed every render-loop sample (a, g in the screen's frame). Gives where the
+// eyes should look when tilted (toward the low side, relative to how it is
+// normally held; a tilt held still for TILT_SETTLE_S becomes the new normal),
+// how far the face should roll to stay level, the eyes' counter-move while it
+// is swung, and one-off events when it is spun around or goes weightless.
+class WorldFollower {
+ public:
+  float tiltX = 0, tiltY = 0;    // -1..1, toward the low side
+  float roll = 0;                // radians: rolling the face by this keeps it level
+  float swingX = 0, swingY = 0;  // -1..1 counter-move of the eyes
+  bool spun = false;             // this sample: spun around on the spot SPIN_TURNS_FOR_DIZZY times
+  bool weightless = false;       // this sample: tossed or dropped (FREEFALL_MS without weight)
+
+  void feed(const float a[3], const float g[3], float shakeStrength, uint32_t now) {
+    spun = weightless = false;
+    float dt = lastAt ? fminf(.1f, (now - lastAt) / 1000.0f) : .025f;
+    lastAt = now;
+    const float n = motion::len3(a), spin = motion::len3(g);
+
+    // Weightless for a moment.
+    if (n < 3.0f && shakeStrength < 3.0f) {
+      if (!fallSince) fallSince = now;
+      if (!fallen && now - fallSince >= FREEFALL_MS) { fallen = true; weightless = true; }
+    } else {
+      fallSince = 0;
+      if (n > 7.0f) fallen = false;
+    }
+    // Spun around in the plane of the screen.
+    if (fabsf(g[2]) > 2.5f) { turned += g[2] * dt; spinAt = now; }
+    else if (now - spinAt > 400) turned = 0;
+    if (fabsf(turned) > SPIN_TURNS_FOR_DIZZY * 6.2831853f) { turned = 0; spun = true; }
+    // Swung: the eyes counter-move against the turn, easing back once it stops.
+    float tx = 0, ty = 0;
+    if (shakeStrength < 2.0f) {
+      tx = fmaxf(-.6f, fminf(.6f, g[1] * SWING_GAZE));
+      ty = fmaxf(-.6f, fminf(.6f, -g[0] * SWING_GAZE));
+    }
+    swingX += (tx - swingX) * .35f;
+    swingY += (ty - swingY) * .35f;
+
+    // Tilt and roll from gravity ("up" as the screen sees it).
+    if (n < 6.0f || n > 14.0f) return;            // jostled: gravity is unreadable right now
+    float u[3] = {a[0] / n, a[1] / n, a[2] / n};
+    if (!haveBase) { for (int i = 0; i < 3; ++i) base[i] = u[i]; haveBase = true; }
+    if (spin < .3f && fabsf(n - 9.81f) < .8f) {
+      float k = dt / TILT_SETTLE_S;               // held still: slowly the new normal
+      for (int i = 0; i < 3; ++i) base[i] += (u[i] - base[i]) * k;
+      float bn = motion::len3(base);
+      for (int i = 0; i < 3; ++i) base[i] /= bn;
+    }
+    // The turn from the normal pose (base x up) says which side went down.
+    float rx = base[1] * u[2] - base[2] * u[1];
+    float ry = base[2] * u[0] - base[0] * u[2];
+    float gx = fmaxf(-1.0f, fminf(1.0f, ry * TILT_GAZE)), gy = fmaxf(-1.0f, fminf(1.0f, -rx * TILT_GAZE));
+    tiltX += (gx - tiltX) * .35f;
+    tiltY += (gy - tiltY) * .35f;
+    // Turned in the plane of the screen: the face rolls back to stay level
+    // (only when the screen is upright enough for "level" to mean something).
+    float bp = sqrtf(base[0] * base[0] + base[1] * base[1]), up = sqrtf(u[0] * u[0] + u[1] * u[1]);
+    float w = fminf(bp, up);
+    w = w <= .35f ? 0.0f : w >= .7f ? 1.0f : (w - .35f) / .35f;
+    w = w * w * (3.0f - 2.0f * w);
+    float r = atan2f(base[0] * u[1] - base[1] * u[0], base[0] * u[0] + base[1] * u[1]) * w;
+    roll = fmaxf(-FACE_ROLL_MAX, fminf(FACE_ROLL_MAX, r));
+  }
+
+ private:
+  bool haveBase = false, fallen = false;
+  float base[3] = {0, -1, 0}, turned = 0;
+  uint32_t lastAt = 0, fallSince = 0, spinAt = 0;
 };

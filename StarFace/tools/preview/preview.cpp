@@ -6,11 +6,12 @@
 //                                  (blink wake sleep shake rattle hold surprised
 //                                   angry gaze morph)
 //
-// Every frame is checked: it may only contain black and the two eye colours.
+// Every frame is checked: every pixel must be a blend of black and the two eye colours.
 // See README.md next to this file.
 #include <stdio.h>
 #include <string>
 #include "EyeRenderer.h"
+#include "palette.h"
 #include "Eyes.h"
 #include "CreatureAnimator.h"
 
@@ -23,14 +24,14 @@ static void writePPM(const std::string &path) {
   fprintf(f, "P6\n%d %d\n255\n", SCREEN_WIDTH, SCREEN_HEIGHT);
   int bad = 0;
   for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; ++i) {
-    if (fb[i] != PIXEL_BACKGROUND && fb[i] != PIXEL_EYE && fb[i] != PIXEL_ACCENT) ++bad;
+    if (!inPalette(fb[i])) ++bad;
     uint16_t c = uint16_t((fb[i] << 8) | (fb[i] >> 8));
     uint8_t rgb[3] = {uint8_t(((c >> 11) & 31) * 255 / 31), uint8_t(((c >> 5) & 63) * 255 / 63),
                       uint8_t((c & 31) * 255 / 31)};
     fwrite(rgb, 1, 3, f);
   }
   fclose(f);
-  if (bad) { fprintf(stderr, "%s: %d pixels outside the two-colour palette\n", path.c_str(), bad); ++badFrames; }
+  if (bad) { fprintf(stderr, "%s: %d pixels that are not a blend of black and the two eye colours\n", path.c_str(), bad); ++badFrames; }
 }
 
 struct Sim {
@@ -81,7 +82,7 @@ struct Bare {
 struct Shot { const char *name; Mood mood; uint32_t duration, at; };
 
 static int finish() {
-  if (badFrames) fprintf(stderr, "%d frame(s) broke the two-colour rule\n", badFrames);
+  if (badFrames) fprintf(stderr, "%d frame(s) broke the palette rule\n", badFrames);
   return badFrames ? 1 : 0;
 }
 
@@ -118,6 +119,10 @@ int main(int argc, char **argv) {
       sim.shot(out + "/sleeping.ppm"); }
     { Sim sim; sim.wake(); sim.c.react(Mood::ANGRY, sim.now, ANGRY_ANIM_MS); sim.run(ANGRY_ANIM_MS + 900);
       sim.shot(out + "/grumpy_after.ppm"); }
+    // Following the world: tilted toward the right and down, and turned so the face rolls level.
+    { Sim sim; sim.wake(); sim.c.setTilt(.9f, .3f); sim.run(900); sim.shot(out + "/tilt_right_down.ppm"); }
+    { Sim sim; sim.wake(); sim.c.setTilt(-.6f, -.8f); sim.run(900); sim.shot(out + "/tilt_left_up.ppm"); }
+    { Sim sim; sim.wake(); sim.c.setFaceRoll(-.42f); sim.run(1500); sim.shot(out + "/rolled_level.ppm"); }
     // Held upside down: worried, then cross, then furious.
     for (int ms : {800, 2600, 5000}) {
       Sim sim; sim.wake(); sim.c.setTilt(0, -.9f); sim.c.setUpsideDown(true, sim.now);

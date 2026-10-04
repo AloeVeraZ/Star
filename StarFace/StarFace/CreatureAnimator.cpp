@@ -208,6 +208,17 @@ void CreatureAnimator::applyInertia(float ax, float ay) {
   inertiaY = band(ay);
 }
 
+void CreatureAnimator::notice(float level, uint32_t now) {
+  if (now - lastNoticeAt < 1200 || current == Mood::SLEEPY || current == Mood::WAKE_UP) return;
+  lastNoticeAt = now;
+  level = clampf(level, .2f, 1.0f);
+  for (int i = 0; i < 2; ++i) {
+    eyes->kickShape(i, ES_HEIGHT, 1.4f * level);   // the eyes pop open a touch...
+    eyes->kickShape(i, ES_PUPIL, -2.0f * level);   // ...and the pupils tighten, then settle
+  }
+  if (chance(.35f)) eyes->blink(Blinker::FAST);
+}
+
 void CreatureAnimator::impact(float ax, float ay) {
   float mag = sqrtf(ax * ax + ay * ay);
   if (mag < .01f) return;
@@ -491,7 +502,15 @@ void CreatureAnimator::sleepScript(uint32_t now, Expression &e, float &k, float 
 // ---- Gaze: the pointer, mood-specific looks, or the eyes' own idle wandering ----
 
 void CreatureAnimator::updateGaze(uint32_t now) {
-  eyes->setGazeBias(tiltX * .55f, tiltY * .55f); // idle looks drift with gravity
+  eyes->setGazeBias(tiltX, tiltY);   // the eyes look toward the low side
+  // The face stays level and the eyes keep looking at you while it is swung
+  // (not while waking or asleep).
+  bool awake = current != Mood::SLEEPY && !(current == Mood::WAKE_UP && age < 1200);
+  eyes->setFaceRoll(awake ? faceRoll : 0.0f);
+  eyes->setLookOffset(awake ? swingX : 0.0f, awake ? swingY : 0.0f);
+  // Interested pupils: a little wider while something is going on.
+  float attention = fminf(1.0f, sqrtf(tiltX * tiltX + tiltY * tiltY) + (pointerHeld ? .6f : 0.0f));
+  eyes->setPupilDilation(1.0f + .08f * attention);
   bool usePointer = pointerHeld ||
       (now - pointerAt < 1300 && (current == Mood::HAPPY || current == Mood::BOOP || current == Mood::PETTED ||
                                   current == Mood::SWIPING || current == Mood::FOLLOWING || current == Mood::LOVED));
@@ -533,6 +552,8 @@ void CreatureAnimator::updateGaze(uint32_t now) {
     default: break;
   }
   if (own) eyes->lookAt(gx, gy, speed);
+  else if (ownedGaze) eyes->lookAround();   // a reaction ended: tilt and idle looks take over at once
+  ownedGaze = own;
   bool sacOn = current != Mood::DIZZY && current != Mood::SLEEPY && current != Mood::BATTERY &&
                !(current == Mood::WAKE_UP && age < 900);
   eyes->setSaccades(sacOn, current == Mood::ANGRY || current == Mood::ANXIOUS);

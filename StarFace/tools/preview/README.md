@@ -22,6 +22,6 @@ the slow sample rates the render loop allows; `soak_test` drives the animator,
 eye system and renderer with hours of random input under address and undefined-behaviour
 sanitizers.
 
-Frames show exactly what the panel receives. Every frame is checked against the palette: each pixel must be a blend of black, `EYE_COLOR` and `PUPIL_COLOR` (anti-aliased edges), or the blush on black; the preview and the soak test fail if any other colour appears. `motion_test` also checks the world-following directions (tilt gaze, level roll, swing, spin, toss).
+Frames show exactly what the panel receives. Every frame is checked against the palette: each pixel must be a blend of black, `EYE_COLOR` and `PUPIL_COLOR` (anti-aliased edges and the glow), or the optional blush on black; the preview and the soak test fail if any other colour appears. `motion_test` also checks the world-following directions (tilt gaze, level roll, swing, spin, toss).
 Timing on a PC says nothing about ESP32 speed; set `LOG_FPS` in `StarFace.ino`
 to measure frame rate on the board.

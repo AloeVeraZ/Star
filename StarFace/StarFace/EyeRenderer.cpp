@@ -66,6 +66,29 @@ struct RGB { float r, g, b; };
 static constexpr RGB rgbOf(uint32_t c) {
   return {float((c >> 16) & 255), float((c >> 8) & 255), float(c & 255)};
 }
+static inline void unpack565(uint16_t v, float &r, float &g, float &b) {
+  uint16_t c = uint16_t((v << 8) | (v >> 8));
+  r = ((c >> 11) & 31) * (255.0f / 31.0f);
+  g = ((c >> 5) & 63) * (255.0f / 63.0f);
+  b = (c & 31) * (255.0f / 31.0f);
+}
+
+// The glow around the eyes: how much of the eye colour shows d px outside
+// the outline (a bright rim fading smoothly to nothing at GLOW_PX).
+static constexpr float GLOW_PX = GLOW_SIZE * SCREEN_MIN_SIDE;
+static float glowLut[65];
+static void buildGlow() {
+  for (int i = 0; i <= 64; ++i) {
+    float d = i * (GLOW_PX / 64.0f);
+    float fade = 1.0f - clamp01(d / GLOW_PX);
+    glowLut[i] = GLOW_STRENGTH * expf(-d / (GLOW_PX * .3f)) * fade * fade;
+  }
+}
+static inline float glowAt(float d) {
+  if (!GLOW || d >= GLOW_PX) return 0;
+  return glowLut[int(fmax2(0.0f, d) * (64.0f / GLOW_PX))];
+}
+
 static inline uint16_t pack565(float r, float g, float b) {
   int ri = int(r * (31.0f / 255.0f) + .5f), gi = int(g * (63.0f / 255.0f) + .5f), bi = int(b * (31.0f / 255.0f) + .5f);
   ri = ri > 31 ? 31 : (ri < 0 ? 0 : ri);
@@ -79,13 +102,15 @@ void EyeRenderer::begin(uint16_t *framebuffer, PushWindowFn pushFn) {
   fb = framebuffer;
   push = pushFn;
   fullRedraw = true;
+  buildGlow();
 }
 
 EyeRenderer::Box EyeRenderer::bounds(const EyeFrame &e) {
   float c = cosf(e.tilt), s = sinf(e.tilt);
   float ry = e.ry + fabsf(e.bend);
-  float ex = sqrtf(e.rx * e.rx * c * c + ry * ry * s * s) + 2.0f;
-  float ey = sqrtf(e.rx * e.rx * s * s + ry * ry * c * c) + 2.0f;
+  const float pad = 2.0f + (GLOW ? GLOW_PX : 0.0f);
+  float ex = sqrtf(e.rx * e.rx * c * c + ry * ry * s * s) + pad;
+  float ey = sqrtf(e.rx * e.rx * s * s + ry * ry * c * c) + pad;
   return {int(floorf(e.cx - ex)), int(floorf(e.cy - ey)), int(ceilf(e.cx + ex)), int(ceilf(e.cy + ey))};
 }
 
@@ -100,15 +125,17 @@ void EyeRenderer::renderEye(const EyeFrame &e, const Box &clip) {
   const float iax = 1.0f / rx, iay = 1.0f / ry, iax2 = iax * iax, iay2 = iay * iay;
   // Near the oval's edge the distance is computed exactly; well inside or
   // outside it is not needed.
-  const float band = 1.6f / fmin2(rx, ry);
-  const float qIn = (1.0f - band) * (1.0f - band), qOut = (1.0f + band) * (1.0f + band);
+  const float glowPx = GLOW ? GLOW_PX : 0.0f;
+  const float band = 1.6f / fmin2(rx, ry), bandOut = (1.6f + glowPx) / fmin2(rx, ry);
+  const float qIn = (1.0f - band) * (1.0f - band), qOut = (1.0f + bandOut) * (1.0f + bandOut);
   const float cs = cosf(e.tilt), sn = sinf(e.tilt);
   const float mirror = e.rightEye ? -1.0f : 1.0f;  // x toward the nose is +
   const float bendK = e.bend * iax2;
   const float k = fmax2(.5f, e.lidRound), invK = 1.0f / k;
   // A lid farther than this (unnormalised) cannot affect a pixel.
   const float slopeT = fabsf(e.topB) + 2.0f * fabsf(e.topC) * rx, slopeB = fabsf(e.botB) + 2.0f * fabsf(e.botC) * rx;
-  const float reachT = (k + 1.5f) * fsqrt(1.0f + slopeT * slopeT), reachB = (k + 1.5f) * fsqrt(1.0f + slopeB * slopeB);
+  const float reachT = (k + 1.5f + glowPx) * fsqrt(1.0f + slopeT * slopeT);
+  const float reachB = (k + 1.5f + glowPx) * fsqrt(1.0f + slopeB * slopeB);
 
   // Pupil (and its heart / spiral morphs) and catch-lights.
   const float pr = e.pupilR;
@@ -160,13 +187,25 @@ void EyeRenderer::renderEye(const EyeFrame &e, const Box &clip) {
         float s2 = e.botB + 2.0f * e.botC * xi;
         d = smax(d, uB * rsqrt(1.0f + s2 * s2), k, invK);
       }
-      if (d >= .5f) continue;
+      if (d >= .5f) {
+        // Outside: the glow. (Brighter wins, so the two eyes' glows and an
+        // eye under the other's glow never darken each other.)
+        float gl = glowAt(d);
+        if (gl > .004f) {
+          float r0, g0, b0;
+          unpack565(line[x], r0, g0, b0);
+          line[x] = pack565(fmax2(r0, EYE.r * gl), fmax2(g0, EYE.g * gl), fmax2(b0, EYE.b * gl));
+        }
+        continue;
+      }
       const float aEye = cover(d);
+      // An edge pixel shows the glow behind the part the eye doesn't cover.
+      const float rim = aEye < 1.0f ? glowAt(0) * (1.0f - aEye) : 0.0f;
 
       float ux = x - pcx;
       if (!pupilRow || fabsf(ux) >= reach) {
         if (aEye >= 1.0f) { line[x] = eyePacked; continue; }
-        line[x] = pack565(EYE.r * aEye, EYE.g * aEye, EYE.b * aEye);
+        line[x] = pack565(EYE.r * (aEye + rim), EYE.g * (aEye + rim), EYE.b * (aEye + rim));
         continue;
       }
       // Pupil: a circle seen on a round eyeball (narrower toward the sides).
@@ -206,7 +245,7 @@ void EyeRenderer::renderEye(const EyeFrame &e, const Box &clip) {
       float r = EYE.r + (PUP.r - EYE.r) * aP;
       float g = EYE.g + (PUP.g - EYE.g) * aP;
       float bl = EYE.b + (PUP.b - EYE.b) * aP;
-      line[x] = pack565(r * keep, g * keep, bl * keep);
+      line[x] = pack565(r * keep + EYE.r * rim, g * keep + EYE.g * rim, bl * keep + EYE.b * rim);
     }
   }
 }

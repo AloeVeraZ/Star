@@ -11,18 +11,22 @@
 // ============================================================================
 
 // ---- Colours ----------------------------------------------------------------
-// Pure black background. Each eye is EYE_COLOR with a big PUPIL_COLOR pupil
-// and catch-lights in EYE_COLOR. Edges are anti-aliased (each edge pixel is a
+// Exactly two colours on pure black: the eye ("back") is a glowing EYE_COLOR,
+// the iris ("front") is PUPIL_COLOR, and the catch-lights are EYE_COLOR
+// again. Edges are anti-aliased and the glow fades out (each such pixel is a
 // blend of these two colours and black, nothing else), which is what makes
-// the shapes look like smooth vector art instead of pixel steps.
+// the shapes look like smooth glowing vector art instead of pixel steps.
 // 24-bit 0xRRGGBB values (shown as the nearest RGB565 colour on the panel).
-static constexpr uint32_t EYE_COLOR = 0xF2ECFF;     // the eyes (and catch-lights): soft lilac white
-static constexpr uint32_t PUPIL_COLOR = 0x6526E0;   // the big irises, hearts and spirals: purple
+static constexpr uint32_t EYE_COLOR = 0xA246FF;     // the eyes, their glow and the catch-lights: glowing purple
+static constexpr uint32_t PUPIL_COLOR = 0x1C0A48;   // the big irises, hearts and spirals: deep midnight indigo
+static constexpr bool GLOW = true;                  // a soft halo of EYE_COLOR around the eyes
+static constexpr float GLOW_STRENGTH = 0.55f;       // halo brightness at the eye's edge
+static constexpr float GLOW_SIZE = 0.045f;          // halo reach, as a fraction of the screen
 static constexpr bool ANTI_ALIAS = true;            // smooth vector edges (false: hard pixel edges)
 // Rosy cheeks under the eyes: a small blush at rest that grows when it is
 // happy, petted or in love, and fades when it is sad or cross (the one extra
 // colour; set CHEEK_BLUSH = false for strictly two colours).
-static constexpr bool CHEEK_BLUSH = true;
+static constexpr bool CHEEK_BLUSH = false;
 static constexpr uint32_t CHEEK_COLOR = 0xFF7EB0;
 
 // ---- Eye size and layout, as fractions of the screen -------------------------
@@ -33,7 +37,7 @@ static constexpr float EYE_HEIGHT = 0.49f;        // height of one oval eye at r
 static constexpr float EYE_SPACING = 0.49f;       // centre-to-centre distance between the eyes
 static constexpr float EYE_OFFSET_Y = 0.03f;      // whole face up (-) or down (+): a little low reads younger, cuter
 static constexpr float PUPIL_SIZE = 0.72f;        // iris radius, as a fraction of the eye's half width (big = friendly)
-static constexpr float PUPIL_CORE = 0.44f;        // black centre of the iris, as a fraction of it (0 = none)
+static constexpr float PUPIL_CORE = 0.0f;         // black centre of the iris, as a fraction of it (0 = none, two colours only)
 static constexpr float GLINT_SIZE = 0.38f;        // main catch-light radius, as a fraction of the iris (0 = none)
 static constexpr float PUPIL_LIFE = 1.0f;         // pupil dilation and fixation tremor: 0 off .. 1.5 lively
 

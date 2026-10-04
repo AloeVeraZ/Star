@@ -17,6 +17,19 @@ inline bool onRay(const float px[3], uint32_t col) {
   return worst <= 14.0f;
 }
 
+// px on the line between EYE_COLOR and PUPIL_COLOR (an iris edge)?
+inline bool onEdge(const float px[3]) {
+  const float E[3] = {float((EYE_COLOR >> 16) & 255), float((EYE_COLOR >> 8) & 255), float(EYE_COLOR & 255)};
+  const float P[3] = {float((PUPIL_COLOR >> 16) & 255), float((PUPIL_COLOR >> 8) & 255), float(PUPIL_COLOR & 255)};
+  float dd = 0, pd = 0;
+  for (int i = 0; i < 3; ++i) { float d = E[i] - P[i]; dd += d * d; pd += (px[i] - P[i]) * d; }
+  float t = pd / dd;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  float worst = 0;
+  for (int i = 0; i < 3; ++i) worst = fmaxf(worst, fabsf(P[i] + t * (E[i] - P[i]) - px[i]));
+  return worst <= 14.0f;
+}
+
 inline bool inPalette(uint16_t v) {
   uint16_t c = uint16_t((v << 8) | (v >> 8));
   const float px[3] = {((c >> 11) & 31) * 255.0f / 31, ((c >> 5) & 63) * 255.0f / 63, (c & 31) * 255.0f / 31};
@@ -30,8 +43,8 @@ inline bool inPalette(uint16_t v) {
   }
   float det = ee * pp - ep * ep;
   float a = (ce * pp - cp * ep) / det, b = (cp * ee - ce * ep) / det;
-  a = a < 0 ? 0 : a; b = b < 0 ? 0 : b;
-  if (a + b > 1) { float s = a + b; a /= s; b /= s; }
+  // Outside the blend triangle: the closest point is on one of its edges.
+  if (a < 0 || b < 0 || a + b > 1) return onRay(px, EYE_COLOR) || onRay(px, PUPIL_COLOR) || onEdge(px);
   float worst = 0;
   for (int i = 0; i < 3; ++i) worst = fmaxf(worst, fabsf(a * E[i] + b * P[i] - px[i]));
   return worst <= 14.0f; // RGB565 rounding

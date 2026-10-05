@@ -296,6 +296,14 @@ void CreatureAnimator::enterMood(Mood m, uint32_t now, uint32_t durationMs, floa
 void CreatureAnimator::update(float dt, uint32_t now) {
   dt = clampf(dt, .0005f, .05f);
   clock += dt;
+  // Battery mood is a persistent layer; event choreography still plays as authored.
+  batteryFatigue = approach(batteryFatigue, battery.fatigue(), 1.2f, dt);
+  batterySadness = approach(batterySadness, battery.sadness(), 1.2f, dt);
+  uint32_t c = battery.color();
+  colorR = approach(colorR, float((c >> 16) & 255), 1.2f, dt);
+  colorG = approach(colorG, float((c >> 8) & 255), 1.2f, dt);
+  colorB = approach(colorB, float(c & 255), 1.2f, dt);
+  eyes->setEyeColor((uint32_t(colorR + .5f) << 16) | (uint32_t(colorG + .5f) << 8) | uint32_t(colorB + .5f));
   updateMoodTimeline(now);
   updateFace(dt, now);
   updateGaze(now);
@@ -340,7 +348,10 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
   if (current == Mood::IDLE && idleActsAllowed && int32_t(now - nextIdleAct) >= 0) {
     float r = frand();
     Mood act;
-    if (attending) {
+    if (batteryFatigue > .1f && r < batteryFatigue) {
+      act = r < batterySadness * .65f ? Mood::SAD : Mood::YAWN;
+      nextIdleAct = now + randMs(5000, 8500);
+    } else if (attending) {
       act = r < .45f ? Mood::HAPPY : r < .75f ? Mood::CURIOUS : r < .88f ? Mood::SHY : Mood::LOVED;
       nextIdleAct = now + randMs(3500, 7000);
     } else if (walking) {
@@ -356,7 +367,8 @@ void CreatureAnimator::updateMoodTimeline(uint32_t now) {
     reactPassive(act, now, len);
   }
   // Restless while carried or bored, eye contact while held up.
-  eyes->setLiveliness(IDLE_LIVELINESS * (walking ? 1.5f : 1.0f) * (bored ? 1.2f : 1.0f), attending ? .8f : 0.0f);
+  eyes->setLiveliness(IDLE_LIVELINESS * (walking ? 1.5f : 1.0f) * (bored ? 1.2f : 1.0f)
+                     * (1.0f - .75f * batteryFatigue), attending ? .8f : 0.0f);
 }
 
 // ---- Expression, lids and blinks for the current mood ----
@@ -373,7 +385,8 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
   switch (current) {
     case Mood::IDLE:
       k = 1;
-      if (grumpy > .01f) { b = ANNOYED; t = grumpy; } // still sulking after anger
+      if (batterySadness > .01f) { e = SAD; b = SLEEPY; t = .35f * batteryFatigue; k = batterySadness; }
+      else if (grumpy > .01f) { b = ANNOYED; t = grumpy; } // still sulking after anger
       else if (running) { b = SURPRISED; t = .45f; }  // whee: wide-eyed
       else if (walking) { b = HAPPY; t = .18f; }      // out and about: smiling eyes
       else if (heldUp && now - heldSince > 1200) { b = HAPPY; t = .10f; } // looking at you, softly
@@ -474,6 +487,10 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
   }
 
   // Being shaken: the eyes widen in alarm.
+  if (current == Mood::IDLE && batteryFatigue > .01f) {
+    open[0] = open[1] = 1.0f - .45f * batteryFatigue;
+    openSpeed = .6f;
+  }
   if (shakeLevel > .01f && !scripted) {
     float a = fminf(shakeLevel, 1.0f);
     open[0] *= 1.0f + .14f * a;
@@ -483,8 +500,8 @@ void CreatureAnimator::updateFace(float dt, uint32_t now) {
   eyes->setExpressionMix(e, b, t, k, speed);
   eyes->setOpenness(open[0], open[1], openSpeed);
   eyes->setBlinkAllowed(blinkOK);
-  eyes->setBlinkPace(pace * (grumpy > .3f ? 1.2f : 1.0f));
-  eyes->setDrowsiness(current == Mood::IDLE ? drowsy : 0.0f);
+  eyes->setBlinkPace(pace * (grumpy > .3f ? 1.2f : 1.0f) * (1.0f + .5f * batteryFatigue));
+  eyes->setDrowsiness(scripted ? 0.0f : fmaxf(current == Mood::IDLE ? drowsy : 0.0f, batteryFatigue));
 }
 
 void CreatureAnimator::wakeScript(uint32_t now, Expression &e, float &k, float *open, float &openSpeed) {
@@ -564,6 +581,12 @@ void CreatureAnimator::updateGaze(uint32_t now) {
   bool own = usePointer;
   float gx = pointerX, gy = pointerY, speed = 1.3f;
   switch (current) {
+    case Mood::IDLE:
+      // Purposeful tilt/pan follows the same lookAt springs as a finger.
+      if (!usePointer && (fabsf(tiltX) + fabsf(tiltY) > .12f)) {
+        own = true; gx = tiltX; gy = tiltY; speed = 1.3f;
+      }
+      break;
     case Mood::SAD: own = true; gx = 0; gy = .72f; speed = .35f; break;
     case Mood::SHY: {
       own = true; gx = -.85f; gy = .2f; speed = .8f;

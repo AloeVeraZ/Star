@@ -17,6 +17,8 @@ g++ -std=gnu++17 -O2 -Wall -I$SRC motion_test.cpp -o "$OUT/starface_motion_test"
 "$OUT/starface_motion_test"
 g++ -std=gnu++17 -O2 -Wall -I$SRC touch_test.cpp -o "$OUT/starface_touch_test"
 "$OUT/starface_touch_test"
+g++ -std=gnu++17 -O2 -Wall -Istubs -I$SRC battery_test.cpp $SRC/EyeRenderer.cpp $SRC/Eyes.cpp $SRC/Expressions.cpp $SRC/CreatureAnimator.cpp -o "$OUT/starface_battery_test"
+"$OUT/starface_battery_test"
 g++ -std=gnu++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined \
   -Istubs -I$SRC soak_test.cpp $SRC/EyeRenderer.cpp $SRC/Eyes.cpp $SRC/Expressions.cpp $SRC/CreatureAnimator.cpp -o "$OUT/starface_soak_test"
 "$OUT/starface_soak_test"

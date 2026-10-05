@@ -55,6 +55,7 @@ class EyeRenderer {
  public:
   void begin(uint16_t *framebuffer, PushWindowFn pushFn);
   void invalidate() { fullRedraw = true; }
+  void setEyeColor(uint32_t rgb) { if (eyeColor != rgb) { eyeColor = rgb; invalidate(); } }
   void draw(const EyeFrame eyes[2]);
   // Draws into the framebuffer without pushing (host previews, screenshots).
   void compose(const EyeFrame eyes[2]);
@@ -64,6 +65,7 @@ class EyeRenderer {
   uint16_t *fb = nullptr;
   PushWindowFn push = nullptr;
   bool fullRedraw = true;
+  uint32_t eyeColor = EYE_COLOR;
   Box prev = {0, 0, -1, -1}, dirty = {0, 0, -1, -1};
 
   static Box bounds(const EyeFrame &e);

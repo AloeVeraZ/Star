@@ -1,6 +1,7 @@
 
 //#include "stdafx.h"
 #include "QMI8658.h"
+#include "FaceLog.h"
 
 #define QMI8658_SLAVE_ADDR_L 0x6a
 #define QMI8658_SLAVE_ADDR_H 0x6b
@@ -542,8 +543,8 @@ unsigned char QMI8658_init(void)
 		{
 
 			QMI8658_read_reg(QMI8658Register_WhoAmI, &QMI8658_chip_id, 1);
-      Serial.print("QMI8658Register_WhoAmI = ");
-      Serial.println(QMI8658_chip_id);
+      FACE_LOG(print, "QMI8658Register_WhoAmI = ");
+      FACE_LOG(println, QMI8658_chip_id);
 //			QMI8658_printf("QMI8658Register_WhoAmI = 0x%x\n", QMI8658_chip_id);
 		}
 		if (QMI8658_chip_id == 0x05)
@@ -555,12 +556,12 @@ unsigned char QMI8658_init(void)
 	QMI8658_read_reg(QMI8658Register_Revision, &QMI8658_revision_id, 1);
 	if (QMI8658_chip_id == 0x05)
 	{
-    Serial.print("QMI8658_init slave = ");
-    Serial.println(QMI8658_slave_addr);
-    Serial.print("nQMI8658Register_WhoAmI = ");
-    Serial.print(QMI8658_chip_id);
-    Serial.print(" ");
-    Serial.println(QMI8658_revision_id);
+    FACE_LOG(print, "QMI8658_init slave = ");
+    FACE_LOG(println, QMI8658_slave_addr);
+    FACE_LOG(print, "nQMI8658Register_WhoAmI = ");
+    FACE_LOG(print, QMI8658_chip_id);
+    FACE_LOG(print, " ");
+    FACE_LOG(println, QMI8658_revision_id);
 //		QMI8658_printf("QMI8658_init slave=0x%x  \r\nQMI8658Register_WhoAmI=0x%x 0x%x\n", QMI8658_slave_addr, QMI8658_chip_id, QMI8658_revision_id);
 		QMI8658_write_reg(QMI8658Register_Ctrl1, 0x60);
 		QMI8658_config.inputSelection = QMI8658_CONFIG_ACCGYR_ENABLE; // QMI8658_CONFIG_ACCGYR_ENABLE;
@@ -577,32 +578,32 @@ unsigned char QMI8658_init(void)
 		{
 			unsigned char read_data = 0x00;
 			QMI8658_read_reg(QMI8658Register_Ctrl1, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl1=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl2, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl2 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl2 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl2=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl3, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl3=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl4, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl4=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl5, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl5=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl6, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl6=0x%x \n", read_data);
 			QMI8658_read_reg(QMI8658Register_Ctrl7, &read_data, 1);
-      Serial.print("QMI8658Register_Ctrl1 = ");
-      Serial.println(read_data);
+      FACE_LOG(print, "QMI8658Register_Ctrl1 = ");
+      FACE_LOG(println, read_data);
 //			QMI8658_printf("QMI8658Register_Ctrl7=0x%x \n", read_data);
 		}
 		//		QMI8658_set_layout(2);
@@ -610,7 +611,7 @@ unsigned char QMI8658_init(void)
 	}
 	else
 	{
-		Serial.println("QMI8658_init fail");
+		FACE_LOG(println, "QMI8658_init fail");
 		QMI8658_chip_id = 0;
 		return 0;
 	}

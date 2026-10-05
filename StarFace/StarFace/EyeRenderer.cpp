@@ -120,7 +120,8 @@ void EyeRenderer::renderEye(const EyeFrame &e, const Box &clip) {
   int y0 = b.y0 > clip.y0 ? b.y0 : clip.y0, y1 = b.y1 < clip.y1 ? b.y1 : clip.y1;
   if (x1 < x0 || y1 < y0 || e.rx < 1.0f || e.ry < 1.0f) return;
 
-  static constexpr RGB EYE = rgbOf(EYE_COLOR), PUP = rgbOf(PUPIL_COLOR);
+  const RGB EYE = rgbOf(eyeColor);
+  static constexpr RGB PUP = rgbOf(PUPIL_COLOR);
   const float rx = e.rx, ry = e.ry;
   const float iax = 1.0f / rx, iay = 1.0f / ry, iax2 = iax * iax, iay2 = iay * iay;
   // Near the oval's edge the distance is computed exactly; well inside or
@@ -152,7 +153,7 @@ void EyeRenderer::renderEye(const EyeFrame &e, const Box &clip) {
   const float coreR = e.coreR;
   const float g1x = e.cx + e.glintX, g1y = e.cy + e.glintY, g1r = e.glintR;
   const float g2x = e.cx + e.glint2X, g2y = e.cy + e.glint2Y, g2r = e.glint2R;
-  const uint16_t eyePacked = PIXEL_EYE;
+  const uint16_t eyePacked = panel565(eyeColor);
 
   for (int y = y0; y <= y1; ++y) {
     uint16_t *line = fb + y * SW;

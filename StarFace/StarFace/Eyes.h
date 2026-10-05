@@ -62,6 +62,7 @@ class Eyes {
   void snapOpenness(float both) { openS[0].snap(both); openS[1].snap(both); }
   float openness(int eye) const { return openS[eye].pos; }
   void setDrowsiness(float d) { drowsy = anim::clamp01(d); }
+  void setEyeColor(uint32_t rgb) { if (renderer) renderer->setEyeColor(rgb); }
   void setGazeBias(float x, float y) { biasX = x; biasY = y; } // nudges idle looks (tilt)
   void setSaccades(bool on, bool tense = false) { gaze.setSaccades(on, tense); }
   void setBlinkAllowed(bool allowed) { blinker.setAllowed(allowed); }

@@ -7,11 +7,9 @@
 // (tools/preview/shake_test.cpp) with simulated accelerometer data.
 //
 // Input is the gravity-free acceleration (m/s^2) and rotation rate (rad/s),
-// sampled at whatever rate the render loop allows (roughly every 20-70 ms).
-// Two independent triggers make it dizzy, so an irregular real-world shake
-// still counts:
-//   * strokes: strong pushes that reverse direction, each within SHAKE_GAP_MS
-//   * strength: a running average of how hard it is shaken, held high
+// sampled by the fast IMU task (~3 ms); the renderer consumes queued events.
+// Dizziness needs sustained average strength AND repeated direction changes.
+// Short strokes still produce the existing slosh/startle feedback.
 // It is built to ignore being carried: walking never makes a stroke, and the
 // odd stroke from running only sloshes the eyes. Only a real back-and-forth
 // (STARTLE, then DIZZY) changes the mood, and a knock (BUMP) only counts when
@@ -31,12 +29,11 @@ class ShakeDetector {
   // Thresholds (awake defaults; the wake-from-sleep check uses its own).
   float strokeMs2 = SHAKE_STROKE_MS2;
   float dizzyStrength = SHAKE_DIZZY_STRENGTH;
-  // Awake, DIZZY needs a steady shake kept up for SHAKE_DIZZY_HOLD_MS. The
-  // wake-from-sleep check instead uses the quick rule (strokesForDizzy strokes
-  // in a row, or holdMs of strong shaking) only to count its own jolts.
+  // Awake, DIZZY needs a steady shake kept up for SHAKE_DIZZY_HOLD_MS.
   bool steadyDizzy = true;
   uint8_t strokesForDizzy = 3;
   uint32_t holdMs = SHAKE_DIZZY_HOLD_MS;
+  uint32_t dropoutMs = SHAKE_DIZZY_DROPOUT_MS;
   // Rotation faster than this counts as shaking too (0: never; awake, only
   // real back-and-forth motion counts, so turning it can't make it dizzy).
   float spinRadS = 0;
@@ -62,7 +59,7 @@ class ShakeDetector {
     if (jolt > strokeMs2 && (!lastStrokeAt || now - lastStrokeAt > 60)) {
       float dot = lin[0] * dir[0] + lin[1] * dir[1] + lin[2] * dir[2];
       if (strokes == 0 || dot < 0) {
-        ++strokes;
+        if (strokes < 255) ++strokes;
         for (int i = 0; i < 3; ++i) dir[i] = lin[i];
         lastStrokeAt = now;
         if (ev != BUMP) ev = strokes == 2 ? STARTLE : STROKE;
@@ -74,26 +71,26 @@ class ShakeDetector {
       if (strength > dizzyStrength) {
         if (!shakingSince) { shakingSince = now; swings = 0; }
         lastStrongAt = now;
-      } else if (shakingSince && now - lastStrongAt > SHAKE_DIZZY_DROPOUT_MS) {
+      } else if (shakingSince && now - lastStrongAt > dropoutMs) {
         shakingSince = 0;   // it stopped: start over
         swings = 0;
       }
       if (shakingSince && jolt > SHAKE_NOISE_MS2 + dizzyStrength && now - lastSwingAt > 60) {
         float dot = lin[0] * swingDir[0] + lin[1] * swingDir[1] + lin[2] * swingDir[2];
         if (swings == 0 || dot < 0) {
-          ++swings;
+          if (swings < 255) ++swings;
           for (int i = 0; i < 3; ++i) swingDir[i] = lin[i];
           lastSwingAt = now;
         }
       }
       // Swings must keep coming: a shake that stopped no longer counts, even
       // while the averaged strength is still fading out.
-      if (shakingSince && swings && now - lastSwingAt > SHAKE_DIZZY_DROPOUT_MS + 100) {
+      if (shakingSince && swings && now - lastSwingAt > dropoutMs + 100) {
         shakingSince = 0;
         swings = 0;
       }
       if (shakingSince && now - shakingSince >= holdMs && swings >= SHAKE_DIZZY_SWINGS &&
-          now - lastSwingAt <= SHAKE_DIZZY_DROPOUT_MS) {
+          now - lastSwingAt <= dropoutMs) {
         shakingSince = now;  // keep shaking: another spell after another hold
         swings = 0;
         strokes = 0;
@@ -199,7 +196,7 @@ struct TwistDetector {
 
 // Wake check after the IMU's motion alarm woke the CPU with the screen dark.
 // Asleep it is deliberately hard to wake: it needs a steady shake, kept up for
-// SHAKE_WAKE_HOLD_MS (about 4 s); stop for longer than SHAKE_WAKE_DROPOUT_MS
+// SHAKE_WAKE_HOLD_MS (about 2 s); stop for longer than SHAKE_WAKE_DROPOUT_MS
 // and the count starts over. Gravity is estimated from scratch here (the CPU
 // was off), starting from the first sample scaled to 1 g.
 class ShakeWakeCheck {
@@ -237,23 +234,41 @@ class ShakeWakeCheck {
     float spin = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
     ShakeDetector::Event ev = det.feed(lin, spin, now);
     if (ev == ShakeDetector::STROKE || ev == ShakeDetector::STARTLE || ev == ShakeDetector::DIZZY) {
-      ++jolts;
+      if (jolts < 255) ++jolts;
       lastJolt = sqrtf(lin[0] * lin[0] + lin[1] * lin[1] + lin[2] * lin[2]);
     }
     if (det.strength > SHAKE_WAKE_STRENGTH) {
-      if (!since) since = now;
+      if (!since) { since = now; swings = 0; lastSwingAt = 0; }
       lastOnAt = now;
     } else if (since && now - lastOnAt > SHAKE_WAKE_DROPOUT_MS) {
       since = 0;   // the shake stopped: start over
-      jolts = 0;
+      jolts = swings = 0;
+    }
+    // Retain testing's acceleration + gyro strength, but require repeated
+    // strong strokes that reverse. Running's one-sided footfalls cannot qualify.
+    float jolt = sqrtf(lin[0]*lin[0] + lin[1]*lin[1] + lin[2]*lin[2]);
+    if (since && jolt > SHAKE_WAKE_STROKE_MS2 &&
+        (!lastSwingAt || now - lastSwingAt > 60)) {
+      float dot = lin[0]*swingDir[0] + lin[1]*swingDir[1] + lin[2]*swingDir[2];
+      if (!swings || dot < 0) {
+        if (swings < 255) ++swings;
+        for (int i = 0; i < 3; ++i) swingDir[i] = lin[i];
+        lastSwingAt = now;
+      }
+    }
+    if (since && lastSwingAt && now - lastSwingAt > SHAKE_WAKE_DROPOUT_MS + 150) {
+      since = 0;
+      jolts = swings = 0;
     }
     // Steady shaking for long enough, and really back and forth.
-    return since && now - since >= SHAKE_WAKE_HOLD_MS && jolts >= 6;
+    return since && now - since >= SHAKE_WAKE_HOLD_MS && jolts >= 6 && swings >= SHAKE_WAKE_SWINGS;
   }
 
  private:
   ShakeDetector det;
   float grav[3] = {0, 0, 0};
   bool seeded = false;
-  uint32_t lastAt = 0, since = 0, lastOnAt = 0;
+  uint32_t lastAt = 0, since = 0, lastOnAt = 0, lastSwingAt = 0;
+  uint8_t swings = 0;
+  float swingDir[3] = {0, 0, 0};
 };

@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "AnimMath.h"
 #include "Eyes.h"
+#include "BatteryState.h"
 
 // Timings of the longer reactions.
 static constexpr uint32_t DIZZY_ANIM_MS = 2850;
@@ -37,6 +38,7 @@ class CreatureAnimator {
   bool sustain(Mood m, uint32_t now, uint32_t durationMs);
   void queue(Mood m, uint32_t at, uint32_t durationMs, int param = 0);
   void showBattery(int percent, uint32_t now);
+  void setBatteryLevel(int percent) { battery.update(percent); }
   // fromShake plays a startled wake into dizziness; touched favors a startled wake.
   void startWake(uint32_t now, bool fromShake, bool touched = false);
   // napLevel > 0: fall asleep but keep the screen on at that backlight level.
@@ -141,6 +143,9 @@ class CreatureAnimator {
   uint32_t nextIdleAct = 0;
   bool idleActsAllowed = true;
   float drowsy = 0;
+  BatteryState battery;
+  float batteryFatigue = 0, batterySadness = 0;
+  float colorR = float((EYE_COLOR >> 16) & 255), colorG = float((EYE_COLOR >> 8) & 255), colorB = float(EYE_COLOR & 255);
   float blLevel = 0;
 
   bool activeAt(uint32_t now) const;

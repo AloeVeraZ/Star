@@ -1,3 +1,36 @@
+# Motion and battery research for the current testing build
+
+Changes build on testing commit `5952a15`; the original eye proportions, expression presets, blinks, spring motion, wake/sleep scripts, and dizzy performance are preserved.
+
+The current upload enables `RAW_ACCEL_SERIAL_ONLY`: native signed accelerometer
+register counts are printed as X,Y,Z CSV at 115200 baud, with other sketch and
+driver messages suppressed. The original hardware filtering remains in place.
+Idle, maximum-awake, startup, and face-down sleep are temporarily bypassed for
+continuous measurement; critical battery shutdown remains active. The user
+confirmed touch/shake waking works but walking and forward-back rocking still
+wake the display. The measurements are intended to tune that physical failure;
+the normal behavior below resumes when the diagnostic flag is disabled.
+
+The [Waveshare schematic](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28/ESP32-S3-Touch-LCD-1.28-Sch.pdf) identifies the QMI8658, shared I2C bus, INT2 on GPIO3, touch IRQ on GPIO5, and a 200k/100k divider from VSYS to GPIO1. VSYS includes the USB/charger power path, so GPIO1 is not an independent cell fuel gauge. Charge expressions use calibrated ADC millivolts times three, a trimmed average, smoothing, a voltage lookup, and recovery hysteresis. At 3% or less, the screen and CPU sleep with only a periodic dark charge check. Exact percentages and total board current require cell/load measurements.
+
+The [QMI8658C revision 0.9 datasheet](https://files.waveshare.com/wiki/common/QMI8658C_datasheet_rev_0.9.pdf), sections 5 and 9, documents accelerometer scale, angular velocity, and wake-on-motion configuration. The existing driver returns mg and degrees/second; the sketch converts to m/s2 and rad/s. Acceleration includes gravity. A time-based 250 ms gravity filter separates fast shake acceleration; a smoothed magnitude must remain high for two seconds with at least six alternating swings. Short interruptions reset the sustained gesture. Recognition now runs in the existing ~333 Hz sampling task, so slower display frames do not alias a rapid shake. Sustained acceleration is used both for awake dizziness and wake confirmation.
+
+The [QMI8658A Rev A datasheet](https://files.waveshare.com/wiki/common/QMI8658A_Datasheet_Rev_A.pdf), sections 5.10, 6, and 12, also explains the existing testing firmware's INT2 output-enable and CTRL9 acknowledgement steps. INT2 starts high-impedance until enabled; WoM requires disabling sensors, choosing low-power acceleration, writing threshold/interrupt selection, issuing CTRL9, and enabling acceleration. Reading STATUS1 clears the event. Exiting WoM requires a zero threshold and the command before normal readings resume. These existing board-specific steps are retained. WoM is a coarse alarm, not a shake classifier: ordinary worn motion can wake the CPU, but the display stays dark until the full gesture is confirmed.
+
+The current wake path is restored from GitHub `origin/testing` commit `5952a15`: the CST816S stays in automatic standby and GPIO5 touch IRQ joins GPIO3 IMU INT2 in the EXT1 wake mask. A single touch wakes directly. Motion uses the testing branch's `ShakeWakeCheck` with its gravity estimate and acceleration/gyro strength. The requested hold is two seconds. To filter worn motion without a specific rotation axis, the wake check additionally requires six strong alternating acceleration strokes above 11 m/s2 and recent continued strokes. Simulated walking/running traces, isolated knocks, short/paused shakes and gyro-only swinging fail confirmation; strong sustained shakes succeed. Physical walking rejection has failed and needs the diagnostic measurements described above. The swivel-only classifier and periodic gyro polling were removed after they prevented practical waking.
+
+An independent awake-session clock starts with the existing wake animation. Its closing script begins at 24.6 seconds and is protected from all input, finishing at the 30-second deadline even under continuous touch or motion. The separate 15-second idle deadline still applies sooner.
+
+An accelerometer can observe tilt through gravity but cannot determine a pan around the gravity axis. The existing tilt follower is extended with bounded, deadbanded gyro integration for that component; it slowly recenters rather than claiming absolute heading. Clear tilt/pan uses the same lookAt springs as a finger. The existing gesture/animation scripts still take precedence while they perform.
+
+The [ESP32-S3 sleep documentation](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html) describes CPU power-down and EXT1 wake. Normal sleep retains IMU motion and touch IRQ wake with the backlight held low. There is no periodic gyro-polling wake. Startup goes straight into sleep. The closing performance starts early enough to be fully dark at the 15-second idle deadline or 30-second awake limit. Walking, gyro tremor, passive posture, and the creature's own animation do not refresh the idle deadline. A purposeful turn followed by settling still counts as activity, without extending the awake limit. Failed motion-interrupt setup stays dark and retries, rather than replaying a wake animation.
+
+Host checks cover strong/light/brief/paused shakes, walking/running/jolts and pure rotation, touch tracking, cardinal tilt and upright pan, battery thresholds and hysteresis, tap anger ending, power timing, and random animation geometry. They are simulations; enclosure-specific sensitivity, real ADC readings, interrupt wake, and battery draw remain physical checks.
+
+---
+
+## Earlier reference and animation notes
+
 # Research and animation direction
 
 The star device in the reference photographs is **CREATURE's Starboy**. Its maker describes a wearable digital pet with animated eyes, an accelerometer, camera, microphone, and temperature sensor. In the maker's examples, shaking makes it dizzy and annoyed, cold makes it shiver, loud sound makes it anxious, and camera-recognized hand gestures trigger responses. Each unit has a distinct personality and eye set; the site advertises over 400 looks and device-to-device encounters. Source: [CREATURE product site](https://hesjustalittleguy.com/).

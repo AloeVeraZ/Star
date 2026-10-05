@@ -27,6 +27,7 @@
 # THE SOFTWARE.
 ******************************************************************************/
 #include "DEV_Config.h"
+#include "FaceLog.h"
 
 uint slice_num;
 SPIClass * vspi = NULL;
@@ -169,7 +170,7 @@ void DEV_SET_PWM(uint8_t Value)
 {
     if (Value < 0 || Value > 100)
     {
-        printf("DEV_SET_PWM Error \r\n");
+        FACE_LOG(printf, "DEV_SET_PWM Error \r\n");
     }
     else
     {
@@ -231,7 +232,7 @@ uint8_t DEV_Module_Init(void)
     Wire.setPins(DEV_SDA_PIN, DEV_SCL_PIN);
     Wire.setClock(400000);
     Wire.begin();
-    printf("DEV_Module_Init OK \r\n");
+    FACE_LOG(printf, "DEV_Module_Init OK \r\n");
     return 0;
 }
 

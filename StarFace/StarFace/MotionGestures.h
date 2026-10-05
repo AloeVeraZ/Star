@@ -266,6 +266,15 @@ class WorldFollower {
     if (n < 6.0f || n > 14.0f) return;            // jostled: gravity is unreadable right now
     float u[3] = {a[0] / n, a[1] / n, a[2] / n};
     if (!haveBase) { for (int i = 0; i < 3; ++i) base[i] = u[i]; haveBase = true; }
+    // A pan around gravity leaves the accelerometer unchanged (e.g. turning
+    // an upright screen left/right). Integrate that gyro component briefly;
+    // its deadband and slow recenter prevent an unobservable heading drifting.
+    float yawRate = g[0] * base[0] + g[1] * base[1] + g[2] * base[2];
+    if (fabsf(yawRate) < .06f || shakeStrength > 2.0f) yawRate = 0;
+    panX = (panX + yawRate * base[1] * dt) * expf(-dt / TILT_SETTLE_S);
+    panY = (panY - yawRate * base[0] * dt) * expf(-dt / TILT_SETTLE_S);
+    panX = fmaxf(-.6f, fminf(.6f, panX));
+    panY = fmaxf(-.6f, fminf(.6f, panY));
     if (spin < .3f && fabsf(n - 9.81f) < .8f) {
       float k = dt / TILT_SETTLE_S;               // held still: slowly the new normal
       for (int i = 0; i < 3; ++i) base[i] += (u[i] - base[i]) * k;
@@ -275,7 +284,8 @@ class WorldFollower {
     // The turn from the normal pose (base x up) says which side went down.
     float rx = base[1] * u[2] - base[2] * u[1];
     float ry = base[2] * u[0] - base[0] * u[2];
-    float gx = fmaxf(-1.0f, fminf(1.0f, ry * TILT_GAZE)), gy = fmaxf(-1.0f, fminf(1.0f, -rx * TILT_GAZE));
+    float gx = fmaxf(-1.0f, fminf(1.0f, (ry + panX) * TILT_GAZE));
+    float gy = fmaxf(-1.0f, fminf(1.0f, (-rx + panY) * TILT_GAZE));
     tiltX += (gx - tiltX) * .35f;
     tiltY += (gy - tiltY) * .35f;
     // Turned in the plane of the screen: the face rolls back to stay level
@@ -291,6 +301,7 @@ class WorldFollower {
  private:
   bool haveBase = false, fallen = false;
   float base[3] = {0, -1, 0}, turned = 0;
+  float panX = 0, panY = 0;
   uint32_t lastAt = 0, fallSince = 0, spinAt = 0;
 };
 

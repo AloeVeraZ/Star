@@ -6,6 +6,13 @@
 //  Eye sizes are fractions of the screen; times are ms; motion is m/s^2.
 // ============================================================================
 
+// ---- Serial diagnostics ------------------------------------------------------
+// Temporary measurement build: 115200 baud, CSV rows of native signed X,Y,Z
+// accelerometer register counts. Keeps the face awake for uninterrupted capture;
+// critical battery shutdown still applies. Set false to restore normal sleep.
+static constexpr bool RAW_ACCEL_SERIAL_ONLY = true;
+static constexpr uint32_t RAW_ACCEL_PRINT_MS = 40; // at most 25 rows per second
+
 // ============================================================================
 //  EYES: the parameters you are most likely to want to change.
 // ============================================================================
@@ -83,17 +90,18 @@ static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for 
 // The dizzy spell needs a real shake kept up: back and forth, at least this
 // strong on average, for SHAKE_DIZZY_HOLD_MS without stopping (dips shorter
 // than SHAKE_DIZZY_DROPOUT_MS are forgiven; a longer pause starts over).
-static constexpr float SHAKE_DIZZY_STRENGTH = 4.0f;  // average shake strength (m/s^2 above noise, ~0.7 g shaking)...
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 3000; // ...kept up for this long
+static constexpr float SHAKE_DIZZY_STRENGTH = 3.5f;  // average shake strength above the noise floor
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 2000; // ...kept up for about two seconds
 static constexpr uint32_t SHAKE_DIZZY_DROPOUT_MS = 350;
 static constexpr uint8_t SHAKE_DIZZY_SWINGS = 6;     // ...with at least this many back-and-forth swings
 // Asleep it is much harder to wake: it takes a steady shake, kept up for
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking
-static constexpr float SHAKE_WAKE_STROKE_MS2 = 6.5f; // one stroke while waking it
-static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 4000; // ...for this long
+static constexpr float SHAKE_WAKE_STROKE_MS2 = 11.0f; // one stroke while waking it
+static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 2000; // ...for this long
 static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // while asleep, rotation faster than this counts toward the wake shake
+static constexpr uint8_t SHAKE_WAKE_SWINGS = 6; // actual alternating strong strokes, not footsteps
 // Turning, twisting or spinning it never makes it dizzy unless these are on:
 // awake, only a hard, rapid back-and-forth shake does.
 static constexpr bool TWIST_MAKES_DIZZY = false;  // three quick twists back and forth
@@ -118,7 +126,7 @@ static constexpr float SWING_GAZE = 0.12f;        // eye counter-move per rad/s 
 static constexpr float SPIN_TURNS_FOR_DIZZY = 1.5f; // spinning it around on the spot this many turns: dizzy
 static constexpr uint32_t FREEFALL_MS = 90;       // weightless this long (tossed or dropped): startled
 static constexpr float STEP_MS2 = 1.2f;           // a footstep bounce at least this strong (walking with it)
-static constexpr bool WALKING_KEEPS_AWAKE = true; // being carried around keeps it awake and watching
+static constexpr bool WALKING_KEEPS_AWAKE = false; // steps animate it while awake, without resetting sleep
 static constexpr float HOT_C = 38.0f;             // the IMU chip warmer than this (pocket, hand, sun): lazy and yawny
 
 // ---- Motion gestures (everything also works without the touch screen) -------
@@ -163,16 +171,22 @@ static constexpr uint32_t TOUCH_STUCK_MS = 15000;
 
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to
-// black, then the screen and ESP32 power down (deep sleep). A touch or a shake
-// wakes it again (a steady shake of about 4 s; see the shake settings).
+// black, then the screen and ESP32 power down (deep sleep). A touch or
+// sustained shaking wakes it. Every awake session ends by MAX_AWAKE_MS.
 // Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it then naps
 // with dimmed, closed eyes after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
 static constexpr uint32_t IDLE_SLEEP_MS = 15000;  // power-save timeout when AUTO_DEEP_SLEEP
+static constexpr uint32_t MAX_AWAKE_MS = 30000;  // unconditional limit, even during interaction
+static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // testing branch default: one touch wakes
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
-static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // true: needs two presses (pocket-proof)
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;
+static constexpr bool START_ASLEEP = true;        // power-on/reset leaves the display dark
+static constexpr uint32_t BATTERY_CHECK_MS = 10000;
+static constexpr uint32_t BATTERY_RECHECK_S = 60; // critical sleep: check for charging once a minute
+static constexpr int CRITICAL_BATTERY_PERCENT = 3;
+static constexpr int BATTERY_RECOVER_PERCENT = 8; // avoids repeatedly waking near empty
 
 // ---- Derived (do not edit) -------------------------------------------------------
 static constexpr float SCREEN_MIN_SIDE = float(SCREEN_WIDTH < SCREEN_HEIGHT ? SCREEN_WIDTH : SCREEN_HEIGHT);

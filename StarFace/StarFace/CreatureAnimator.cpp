@@ -111,6 +111,7 @@ bool CreatureAnimator::activeAt(uint32_t now) const {
 }
 
 bool CreatureAnimator::react(Mood m, uint32_t now, uint32_t durationMs, bool direct) {
+  if (touchAngerPauseActive(now)) return false;
   if (activeAt(now) && current == Mood::DIZZY) {
     if (m != Mood::DIZZY) return false; // the shake reaction always plays through
     if (age < 1600) return true;  // still spinning; impact() already added the jolt
@@ -122,11 +123,21 @@ bool CreatureAnimator::react(Mood m, uint32_t now, uint32_t durationMs, bool dir
 }
 
 void CreatureAnimator::huff(float amount, uint32_t now) {
+  if (touchAngerPauseActive(now)) return;
   amount = clamp01(amount);
   if (activeAt(now) && current == Mood::DIZZY) return;
   queued = Mood::IDLE;
   enterMood(Mood::ANGRY, now, 450 + uint32_t(900 * amount), .55f + .45f * amount);
   angerResidue = amount;
+}
+
+void CreatureAnimator::startTouchAngerPause(uint32_t now) {
+  touchAngerProtected = true;
+  touchAngerSince = now;
+  queued = Mood::IDLE;
+  pointerHeld = false;
+  shakeLevel = inertiaX = inertiaY = 0;
+  enterMood(Mood::ANGRY, now, TOUCH_ANGER_PAUSE_MS);
 }
 
 bool CreatureAnimator::reactPassive(Mood m, uint32_t now, uint32_t durationMs) {
@@ -149,6 +160,7 @@ void CreatureAnimator::queue(Mood m, uint32_t at, uint32_t durationMs, int param
 }
 
 void CreatureAnimator::showBattery(int percent, uint32_t now) {
+  if (touchAngerPauseActive(now)) return;
   batteryAmount = percent < 0 ? .55f : .17f + .83f * constrain(percent, 0, 100) / 100.0f;
   bool resume = activeAt(now) && current != Mood::SWIPING && current != Mood::BATTERY &&
                 current != Mood::SLEEPY && current != Mood::WAKE_UP && current != Mood::DIZZY;
@@ -159,6 +171,7 @@ void CreatureAnimator::showBattery(int percent, uint32_t now) {
 }
 
 void CreatureAnimator::startWake(uint32_t now, bool fromShake, bool touched) {
+  touchAngerProtected = false;
   if (fromShake) {
     wakeVariant = WAKE_STARTLED_INDEX;
     wakeScale = .8f;
@@ -183,6 +196,7 @@ void CreatureAnimator::startWake(uint32_t now, bool fromShake, bool touched) {
 }
 
 void CreatureAnimator::startSleep(uint32_t now, float nap) {
+  touchAngerProtected = false; // battery/30-second shutdown always takes precedence
   queued = Mood::IDLE;
   napLevel = clamp01(nap);
   nextPeekAt = now + SLEEP_SEQUENCE_MS + randMs(9000, 20000);
@@ -195,6 +209,7 @@ bool CreatureAnimator::sleepFinished(uint32_t now) const {
 }
 
 void CreatureAnimator::setPointer(float x, float y, uint32_t now) {
+  if (touchAngerPauseActive(now)) return;
   pointerX = clampf(x, -1.0f, 1.0f);
   pointerY = clampf(y, -1.0f, 1.0f);
   pointerAt = now;
@@ -315,6 +330,7 @@ void CreatureAnimator::update(float dt, uint32_t now) {
 }
 
 void CreatureAnimator::updateMoodTimeline(uint32_t now) {
+  if (touchAngerProtected && !touchAngerPauseActive(now)) touchAngerProtected = false;
   if (queued != Mood::IDLE && int32_t(now - queuedAt) >= 0) {
     Mood m = queued;
     queued = Mood::IDLE;
@@ -565,12 +581,13 @@ void CreatureAnimator::sleepScript(uint32_t now, Expression &e, float &k, float 
 // ---- Gaze: the pointer, mood-specific looks, or the eyes' own idle wandering ----
 
 void CreatureAnimator::updateGaze(uint32_t now) {
-  eyes->setGazeBias(tiltX, tiltY);   // the eyes look toward the low side
+  eyes->setGazeBias(touchAngerProtected ? 0 : tiltX, touchAngerProtected ? 0 : tiltY);
   // The face stays level and the eyes keep looking at you while it is swung
   // (not while waking or asleep).
   bool awake = current != Mood::SLEEPY && !(current == Mood::WAKE_UP && age < 1200);
   eyes->setFaceRoll(awake ? faceRoll : 0.0f);
-  eyes->setLookOffset(awake ? swingX : 0.0f, awake ? swingY : 0.0f);
+  eyes->setLookOffset(awake && !touchAngerProtected ? swingX : 0.0f,
+                      awake && !touchAngerProtected ? swingY : 0.0f);
   // Interested pupils: a little wider while something is going on.
   float attention = fminf(1.0f, sqrtf(tiltX * tiltX + tiltY * tiltY) + (pointerHeld ? .6f : 0.0f)
                                + (heldUp ? .6f : 0.0f) + (walking ? .3f : 0.0f));
@@ -636,7 +653,7 @@ void CreatureAnimator::updateGaze(uint32_t now) {
   ownedGaze = own;
   bool sacOn = current != Mood::DIZZY && current != Mood::SLEEPY && current != Mood::BATTERY &&
                !(current == Mood::WAKE_UP && age < 900);
-  eyes->setSaccades(sacOn, current == Mood::ANGRY || current == Mood::ANXIOUS);
+  eyes->setSaccades(sacOn && !touchAngerProtected, current == Mood::ANGRY || current == Mood::ANXIOUS);
 }
 
 // ---- Body: the pair of eyes as one mass, with weight, inertia and recoil ----
@@ -738,7 +755,7 @@ void CreatureAnimator::updateEffects(float dt) {
       ey[i] += 1.0f * a * noise1(clock * 15.0f + i * 1.1f, seed + 111 + i);
     }
   }
-  if (current == Mood::ANGRY || current == Mood::ANXIOUS) { // small rapid eye movements
+  if (!touchAngerProtected && (current == Mood::ANGRY || current == Mood::ANXIOUS)) {
     for (int i = 0; i < 2; ++i) {
       px[i] += .05f * noise1(clock * 9, seed + 11 + i);
       py[i] += .04f * noise1(clock * 9, seed + 21 + i);

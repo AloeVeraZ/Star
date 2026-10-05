@@ -67,6 +67,7 @@ class CreatureAnimator {
   void setPointer(float x, float y, uint32_t now);
   // A finger is on the screen. The longer it stays, the angrier it gets.
   void setPointerHeld(bool held, uint32_t now) {
+    if (touchAngerPauseActive(now)) { pointerHeld = false; return; }
     if (held && !pointerHeld) holdSince = now;
     pointerHeld = held;
   }
@@ -79,6 +80,10 @@ class CreatureAnimator {
   // Let go after being held: a huff proportional to how annoyed it got, then
   // it cools down over ANGER_COOLDOWN_S.
   void huff(float amount, uint32_t now);
+  void startTouchAngerPause(uint32_t now);
+  bool touchAngerPauseActive(uint32_t now) const {
+    return touchAngerProtected && now - touchAngerSince < TOUCH_ANGER_PAUSE_MS;
+  }
   void setTouchPoint(int x, int y) { touchX = x; touchY = y; }
   void setSwipe(int sx, int sy) { swipeX = sx; swipeY = sy; }
   void applyInertia(float ax, float ay);  // gravity-free device acceleration, m/s^2
@@ -112,6 +117,8 @@ class CreatureAnimator {
   float batteryAmount = .55f;
   float impactX = 1, impactY = 0;
   uint32_t angrySquintUntil = 0, nextAngrySquint = 0, nextDartAt = 0;
+  bool touchAngerProtected = false;
+  uint32_t touchAngerSince = 0;
   float dartX = 0, dartY = 0;
 
   // Scripted sequences (wake, sleep, nap)

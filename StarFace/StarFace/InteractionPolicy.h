@@ -5,6 +5,17 @@ inline Mood tapMood(unsigned streak) {
   return streak >= 3 ? Mood::ANGRY : streak == 2 ? Mood::SURPRISED : Mood::BOOP;
 }
 
+// Screen taps only; case knocks cannot contribute to the five-tap cooldown.
+struct ScreenTapRun {
+  uint8_t count = 0;
+  uint32_t lastAt = 0;
+  uint8_t add(uint32_t now) {
+    count = count && now - lastAt <= TOUCH_TAP_RUN_GAP_MS ? (count < 5 ? count + 1 : 5) : 1;
+    lastAt = now;
+    return count;
+  }
+};
+
 // Keep the existing closing choreography, with the display off at the deadline.
 inline uint32_t sleepAnimationDelay(uint32_t timeout) {
   return timeout > SLEEP_SEQUENCE_MS ? timeout - SLEEP_SEQUENCE_MS : 0;

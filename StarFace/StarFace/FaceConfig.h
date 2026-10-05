@@ -7,11 +7,11 @@
 // ============================================================================
 
 // ---- Serial diagnostics ------------------------------------------------------
-// Temporary measurement build: 115200 baud, CSV rows of native signed X,Y,Z
-// accelerometer register counts. Keeps the face awake for uninterrupted capture;
+// Temporary measurement build: 115200 baud, labeled AX,AY,AZ,GX,GY,GZ rows of
+// native signed accel/gyro register counts. Keeps the face awake for capture;
 // critical battery shutdown still applies. Set false to restore normal sleep.
-static constexpr bool RAW_ACCEL_SERIAL_ONLY = true;
-static constexpr uint32_t RAW_ACCEL_PRINT_MS = 40; // at most 25 rows per second
+static constexpr bool RAW_IMU_SERIAL_ONLY = false;
+static constexpr uint32_t RAW_IMU_PRINT_MS = 40; // at most 25 rows per second
 
 // ============================================================================
 //  EYES: the parameters you are most likely to want to change.
@@ -102,6 +102,15 @@ static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 2000; // ...for this long
 static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // while asleep, rotation faster than this counts toward the wake shake
 static constexpr uint8_t SHAKE_WAKE_SWINGS = 6; // actual alternating strong strokes, not footsteps
+// Recorded intended left/right wake: AY acceleration and GZ rotation dominate.
+// Recorded carried forward/back movement: GY rotation dominates instead.
+static constexpr float WAKE_AY_ENERGY_SHARE = .50f;
+static constexpr float WAKE_GZ_ENERGY_SHARE = .42f;
+static constexpr float WAKE_GZ_OVER_GY = 1.35f;
+static constexpr float WAKE_AY_RMS_MS2 = 3.8f;
+static constexpr float WAKE_GZ_RMS_RAD_S = 2.5f;
+static constexpr float WAKE_AY_STROKE_MS2 = 7.0f;
+static constexpr float WAKE_GZ_REVERSAL_RAD_S = 1.8f;
 // Turning, twisting or spinning it never makes it dizzy unless these are on:
 // awake, only a hard, rapid back-and-forth shake does.
 static constexpr bool TWIST_MAKES_DIZZY = false;  // three quick twists back and forth
@@ -168,6 +177,8 @@ static constexpr bool TOUCH_ENABLED = true;
 // A "finger" that never lifts (a cover pressing on the glass, moisture) is
 // ignored after this long, so it cannot keep the creature angry or awake.
 static constexpr uint32_t TOUCH_STUCK_MS = 15000;
+static constexpr uint32_t TOUCH_TAP_RUN_GAP_MS = 650;
+static constexpr uint32_t TOUCH_ANGER_PAUSE_MS = 3500;
 
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to

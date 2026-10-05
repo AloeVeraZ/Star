@@ -56,6 +56,35 @@ int main(int argc, char **argv) {
   CHECK(tapMood(1) == Mood::BOOP && tapMood(2) == Mood::SURPRISED);
   CHECK(tapMood(3) == Mood::ANGRY && tapMood(4) == Mood::ANGRY);
 
+  for (uint32_t began : {100u, UINT32_MAX - 1000u}) {
+    ScreenTapRun run;
+    for (unsigned i = 1; i <= 5; ++i) CHECK(run.add(began + i * 200) == i);
+    CHECK(run.add(began + 3000) == 1); // a new run after a pause
+    EyeRenderer renderer; Eyes eyes; CreatureAnimator creature;
+    renderer.begin(fb, nullptr); eyes.begin(&renderer, 1234, began);
+    creature.begin(&eyes, 1234, began);
+    creature.startWake(began, false);
+    creature.startTouchAngerPause(began + 1000);
+    for (uint32_t elapsed = 16; elapsed < TOUCH_ANGER_PAUSE_MS; elapsed += 16) {
+      uint32_t now = began + 1000 + elapsed;
+      creature.setPointerHeld(true, now);
+      creature.setPointer(1, 1, now);
+      CHECK(!creature.react(Mood::FOLLOWING, now, 600));
+      CHECK(!creature.react(Mood::DIZZY, now, DIZZY_ANIM_MS));
+      creature.huff(.2f, now);
+      creature.update(.016f, now);
+      CHECK(creature.mood() == Mood::ANGRY);
+    }
+    uint32_t resumed = began + 1000 + TOUCH_ANGER_PAUSE_MS;
+    CHECK(!creature.touchAngerPauseActive(resumed));
+    CHECK(creature.react(Mood::FOLLOWING, resumed, 600));
+    // Neither battery shutdown nor the unconditional sleep deadline is blocked.
+    creature.startTouchAngerPause(resumed + 1);
+    creature.startSleep(resumed + 2, 0);
+    CHECK(!creature.touchAngerPauseActive(resumed + 3));
+    CHECK(creature.asleep());
+  }
+
   { // Same final closing as the sketch: an active dizzy/touch hold cannot extend it.
     EyeRenderer renderer; Eyes eyes; CreatureAnimator creature;
     renderer.begin(fb, nullptr); eyes.begin(&renderer, 1234, 100);
@@ -76,6 +105,27 @@ int main(int argc, char **argv) {
     }
     CHECK(closing && creature.sleepFinished(30100));
     CHECK(creature.backlight() < .001f);
+  }
+
+  { // An upright screen rolled/pitched around a cone should trace all quadrants.
+    WorldFollower world;
+    float a[3] = {0,-9.81f,0}, g[3] = {};
+    world.feed(a, g, 0, 1);
+    float minX=1, maxX=-1, minY=1, maxY=-1;
+    for (uint32_t t=26; t<8026; t+=25) {
+      float phase=(t-26)*.001f*6.2831853f/4.0f;
+      float s=sinf(.4363f), c=cosf(.4363f);
+      a[0]=-9.81f*s*cosf(phase); a[1]=-9.81f*c; a[2]=9.81f*s*sinf(phase);
+      g[0]=.4f; // an ongoing turn must not be learned as the new resting pose
+      world.feed(a, g, 0, t);
+      if (t>4026) {
+        minX=fminf(minX,world.tiltX); maxX=fmaxf(maxX,world.tiltX);
+        minY=fminf(minY,world.tiltY); maxY=fmaxf(maxY,world.tiltY);
+        float radius=sqrtf(world.tiltX*world.tiltX+world.tiltY*world.tiltY);
+        CHECK(radius>.75f && radius<1.15f);
+      }
+    }
+    CHECK(minX<-.7f && maxX>.7f && minY<-.7f && maxY>.7f);
   }
 
   // A pan about vertical gravity is invisible to the accelerometer. The gyro

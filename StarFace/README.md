@@ -8,29 +8,38 @@ A wearable eye pet for the **Waveshare ESP32-S3-Touch-LCD-1.28**, adapted from [
 
 ## What it does
 
-**Current build: accelerometer diagnostics.** `RAW_ACCEL_SERIAL_ONLY = true` in
-`StarFace/FaceConfig.h` makes Serial Monitor at **115200 baud** show only CSV rows
-in **X,Y,Z** order. Each value is an original signed 16-bit QMI8658 accelerometer
-register count, including gravity (the configured ±8 g range is 4096 counts/g).
-The sensor's existing hardware filter remains enabled; no software smoothing,
-screen-axis rotation, unit conversion, or gravity removal is applied to these
-rows. Gyro, battery, startup, and gesture messages are suppressed. Rows are
-printed at most every 40 ms; rendering can lower that rate. A reset may still
-emit the ESP32 ROM's boot banner before the sketch starts.
+**Current build: directional wake.** Normal serial messages and power-saving
+sleep are restored (`RAW_IMU_SERIAL_ONLY = false`). Motion wake requires the
+recorded left/right pattern for about two seconds: AY acceleration dominates,
+GZ rotation dominates GY, and both reverse repeatedly. The carried forward/back
+pattern is rejected during dark-screen confirmation and does not trigger awake
+motion reactions or reset activity once recognized. The existing visual gaze
+follower and touch interactions remain available. Idle sleep is 15 seconds and
+the unconditional awake limit is 30 seconds.
 
-The existing face and touch/motion animations keep running. This measurement
-mode starts awake and bypasses idle, 30-second, and face-down sleep so readings
-continue while testing different orientations. Critical battery shutdown remains
-enabled. Set `RAW_ACCEL_SERIAL_ONLY = false` and upload again to restore the
-normal sleep/wake behavior described below. Walking/forward-back rocking has
-still been observed to wake this device; capture its axes before tuning the
-wake detector further.
+The supplied recordings have no timestamps and several clipped gyro values.
+Replay checks at assumed 40, 55, and 80 ms intervals pass; physical testing on
+pants/bag is still needed. The gyro range is now ±2048 degrees/s to reduce
+clipping. Thresholds are in `FaceConfig.h`; the detector is `LeftRightWake.h`.
+Serial Monitor at **115200 baud** reports wake progress, AY/GZ energy shares,
+GZ-to-GY ratio, and whether the motion was rejected as carrying.
+
+**Optional six-axis diagnostics.** Set `RAW_IMU_SERIAL_ONLY = true` to print only
+native signed register counts labeled **AX,AY,AZ,GX,GY,GZ**, at most every 40 ms.
+Acceleration includes gravity (4096 counts/g); gyro measures rotation speed
+(16 counts per degree/s at the new range). These are not absolute rotation
+angles. The original hardware filter stays enabled; no software smoothing,
+screen rotation, unit conversion, or gravity subtraction is applied. This
+measurement mode starts awake and bypasses ordinary sleep, while preserving
+critical battery shutdown. Startup clears retained WoM after ESP32 reset/upload,
+and the checked diagnostic read skips failed I2C transfers and frozen sensor
+timestamps. A reset can emit the ROM boot banner before the sketch starts.
 
 - **Starts asleep with the display off.** A confirmed wake uses the existing eye-opening choreography. Idle glances cover the cardinal and diagonal directions, with tiny drift, irregular blinks, and occasional double blinks.
 - **It follows the world** through the QMI8658 motion sensor, with or without touch:
   - **Tilt it any way** (left, right, forward, back, flat or upright) and the eyes look toward the side that went down, within a fraction of a second. A tilt held still for 20 s becomes its new normal.
   - The eyes stay square to the board (their line parallel to the edge with the USB-C port). Set `FACE_STAYS_LEVEL = true` to have the face roll back instead when the star is turned, staying level with the ground, or `FACE_ANGLE_DEG` if the enclosure holds the board turned.
-  - **Pan an upright screen left/right:** gyro integration covers rotations that gravity alone cannot see; diagonals combine pan and tilt. The eyes use the same gaze springs as finger tracking, with slow recentering to limit heading drift.
+  - **Rotate an upright screen left/right or tilt around a circle:** in-plane roll, pitch, and gyro pan combine into a full two-dimensional gaze; diagonals and circles use the same gaze springs as finger tracking. The eyes use the same gaze springs as finger tracking, with slow recentering to limit heading drift.
   - **Swing it around** and the eyes counter-move to keep looking at you, then ease back.
   - **Shake it for about 2 seconds straight** for the dizzy spiral-eyed tumble (the eyes rattle and startle the whole time, so you see it building); a short or gentle shake only rattles and startles it, and turning or spinning it never makes it dizzy (`TWIST_MAKES_DIZZY`, `SPIN_MAKES_DIZZY` turn those back on).
   - **Toss it** (or drop it): weightless for a moment, it gets startled. **Bump or nudge it** while it is calm: it notices with a quick widen and blink. **Pick it up after it has rested** a while: "oh!", then a happy hello.
@@ -39,7 +48,7 @@ wake detector further.
   - **Leave it alone:** right up until it falls asleep its eyes keep moving (a new look every half second to few seconds, little micro-expressions in between), and every 3-6 seconds it does something by itself (looks around the room, a curious sideways look, a yawn, a happy squint, a puzzled look); the longer it is left alone, the more it gets bored and yawns, then it gets drowsy and falls asleep (`IDLE_SLEEP_MS`, 15 s after the last interaction).
   - **Warm** (pocket, hand, sun; the IMU chip above `HOT_C`): lazy yawns now and then. **Cold:** it shivers.
 - The pupils lead and the whole eyes follow a beat later; the second eye trails a fraction behind the first, fast moves squash and stretch the eyes slightly, and the eye on the side being looked toward grows a little (curious), so gaze reads as a small head turn. Left alone it looks around (often back at you), blinks at random (with doubles, half blinks and slow blinks) and shows brief micro-expressions: a squint, a curious lift, a sceptical look.
-- **Touch:** while a finger is on the screen the eyes follow it wherever it moves. A tap makes the nearer eye flinch first, then both rebound and settle; a double tap surprises them; **three or four quick taps** play the existing angry animation for 1.9 seconds, then it settles with its usual brief sulk. A short gentle press is a pet (happy crescent eyes). **Holding on annoys it**: after about a second the lids lower, then it glares at your finger and trembles; let go and it huffs, then cools off over a few seconds.
+- **Touch:** while a finger is on the screen the eyes follow it wherever it moves. A tap makes the nearer eye flinch first, then both rebound and settle; a double tap surprises them; **three or four quick taps** play the existing angry animation for 1.9 seconds. **Five consecutive screen taps** (no more than 650 ms apart) start a protected 3.5-second angry pause: touches are drained and ignored, the pointer does not move, and reactions cannot restart its anger. It then resumes normal interaction and its usual brief sulk. Battery and unconditional sleep shutdown take precedence over the pause. A short gentle press is a pet (happy crescent eyes). **Holding on annoys it**: after about a second the lids lower, then it glares at your finger and trembles; let go and it huffs, then cools off over a few seconds.
 - **Everything works without the touch screen** (for example behind a protective Lexan cover), using the motion sensor:
 
   | Touch | Motion instead |
@@ -48,16 +57,22 @@ wake detector further.
   | Swipe up / down / left / right (battery, sad, shy, happy) | **Tip it** up / down / left / right **and straight back** |
   | Gentle press (petted) | **Rock it gently** side to side, like cradling it; it stays content while you rock |
   | Hold a finger on it (worried, then angrier and angrier) | **Hold it upside down** (relative to how you usually hold it, which it learns); turn it back over and it huffs, then cools off |
-  | Wake from sleep | **Touch the screen or shake steadily for about 2 s** |
+  | Wake from sleep | **Touch the screen or shake left/right for about 2 s** |
   | — | **Lay it face down** for 4 s to put it to sleep |
 
   Knocks and sustained shakes are recognized by a small task on the ESP32's second core that reads the motion sensor about 330 times a second (a knock is over in milliseconds); recognition is independent of display frame time. It also switches on the sensor's ~54 Hz low-pass filter, which Waveshare's driver leaves off by mistake. A knock only counts when the star was still just before and settles right after, so walking, running, shaking and swinging it never count. Quick twists only cause dizziness when `TWIST_MAKES_DIZZY` is enabled; slower swings are rocking. Touch works while awake and wakes the creature from sleep, as in the testing branch. A held touch is still ignored after `TOUCH_STUCK_MS`.
 - A swipe pulls and stretches the eyes in its direction, then releases them into an expression. The direction is taken from **the last flick of your finger** before it lifts, so you can press anywhere, wander around, and flick whichever way you like. **Up** calls `showBatteryLevel(percent)`: the eyes close, reopen to a height reflecting the approximate charge for 2.6 seconds, then return to their previous mood. An unknown reading produces a half-open questioning look. **Down** makes them sad, **left** shy, and **right** delighted. There are no touch rings, particles, icons, or battery bar: only the eyes react.
 - **Expressions** (all kept; they morph smoothly into each other): neutral, happy (crescent "^" eyes), sad, angry, focused (determined), surprised (wide and round with small pupils), sleepy, squint, curious (one eye wide, one narrowed), confused, suspicious, worried, annoyed, love (heart pupils) and dizzy (spinning spiral pupils).
-- **Carried around:** walking does not reset sleep. Routine movement can wake the CPU briefly, with the screen dark, for gesture verification. Walking rejection needs further on-device tuning using the diagnostic readings above.
+- **Carried around:** walking does not reset sleep. Routine movement can wake the CPU briefly, with the screen dark, for gesture verification. The recorded forward/back motion is rejected in replay; confirm with the physical carrying test.
 - **Shaking** gets an instant reaction: from the first stroke the eyes widen in alarm, their pupils shrink and jiggle, and each stroke throws the eyes the other way. A gentle or moderate shake only rattles and startles it, and turning, twisting or spinning it never makes it dizzy. Only **shaking it for about 2 seconds straight** (a real back-and-forth shake of roughly 1 g or more, kept up; stop for more than about a third of a second and the count starts over) sends the eyes into a wobble and a slowing tumble with **spinning spiral pupils**, followed by an angry glare that cools off over a few seconds — "shake him and he gets dizzy and mad at you". Keep shaking and the tumble starts again. The same startled, dizzy wake sequence plays after a sustained shake wakes it from sleep. A face-down pause makes one eye narrow. If the IMU's own chip temperature remains below 18 °C for eight seconds, the eyes shiver; this reads chip temperature and may lag or differ from the surrounding air.
 - **Power-saving sleep:** **by 15 seconds from the latest interaction**, the eyes have drooped, completed their closing blink, and faded to black; then the LCD enters sleep-in, the backlight turns off, and the ESP32 enters **deep sleep**. Every touch, knock, tilt flick, rocking, confirmed shake, and purposeful tilt held still resets the timer; idle animation, sensor noise, standing in one upside-down orientation, and walking do not. Any touch IRQ during the closing animation cancels sleep immediately, even if the touch controller reports incomplete coordinates. **Regardless of interaction, every awake session ends at 30 seconds (`MAX_AWAKE_MS`).** The existing closing sequence begins at 24.6 seconds; touches and motion cannot interrupt this final shutdown.
-- From deep sleep, **touch the screen once** to wake, using the testing branch’s IRQ/automatic-standby behavior. Or **shake steadily for about two seconds**: strong back-and-forth acceleration, on any axis, with at least six alternating strokes. The CPU wakes for the IMU’s motion alarm but keeps the screen dark during confirmation. The detector rejects gentle motion in simulations, but walking/forward-back rocking still causes physical false wakes and needs measurement. No special left/right swivel is required.
+- From deep sleep, **touch the screen once** to wake, or perform the recorded
+  **left/right shake for about two seconds**. The CPU checks motion with the
+  screen dark: gravity-free AY energy must be at least 50% of acceleration
+  energy, GZ at least 42% of rotation energy and 1.35 times GY energy, with
+  sustained strength and repeated AY/GZ reversals. The supplied forward/back
+  trace fails these combined checks. A single bump, short shake, pure rotation,
+  or translation without matching rotation cannot confirm this gesture.
 
 The face layout is symmetric at rest. Small differences between eyes during expressions are intentional. The physical shell preview is a visual mockup based on the screenshots; no CAD geometry was altered. Starboy's camera, microphone, haptic motor, and proprietary device-to-device protocol are absent from this Waveshare board, so its hand-gesture, sound, vibration, and Starboy-to-Starboy features cannot run here without new hardware or protocol information. The swipe and tap mappings provide hands-on substitutes for some of those interactions.
 

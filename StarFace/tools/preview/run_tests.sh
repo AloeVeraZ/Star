@@ -13,6 +13,9 @@ SRC=../../StarFace
 OUT=${TMPDIR:-/tmp}
 g++ -std=gnu++17 -O2 -Wall -I$SRC shake_test.cpp -o "$OUT/starface_shake_test"
 "$OUT/starface_shake_test"
+
+g++ -std=gnu++17 -O2 -Wall -I$SRC left_right_wake_test.cpp -o "$OUT/starface_left_right_wake_test"
+"$OUT/starface_left_right_wake_test"
 g++ -std=gnu++17 -O2 -Wall -I$SRC motion_test.cpp -o "$OUT/starface_motion_test"
 "$OUT/starface_motion_test"
 g++ -std=gnu++17 -O2 -Wall -I$SRC touch_test.cpp -o "$OUT/starface_touch_test"

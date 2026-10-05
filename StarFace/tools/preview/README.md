@@ -27,3 +27,12 @@ Timing on a PC says nothing about ESP32 speed; set `LOG_FPS` in `StarFace.ino`
 to measure frame rate on the board.
 
 Battery and power behavior is covered by `battery_test.cpp`: charge stages and recovery hysteresis, critical sleep recovery, the 15-second idle and unconditional 30-second display-off deadlines (including repeated interaction and millis wrap), triple/four-tap anger ending, and gyro-only upright pan. The restored testing-branch wake check accepts sustained shaking on any axis and rejects walking/running traces (including 20-second continuous checks), short/paused shakes, single knocks and gyro-only swinging. Single-touch wake is enabled as in the testing branch. The shake tests recognize at the same fast sampling interval as the sketch and deliver events at varied render rates.
+# Directional motion wake checks
+
+`left_right_wake_test.cpp` exercises the firmware's current `LeftRightWakeCheck`.
+It preserves the user's deliberate left/right and carried forward/back records,
+replays them at several assumed intervals/starting points, and checks sustained
+wake, short/paused attempts, sample gaps and wrong-axis movement. The supplied
+records have no timestamps; repeated replay is a classification regression,
+not evidence of physical gesture duration or universal walking rejection.
+The generic wake checks in `shake_test.cpp` retain the older testing baseline.

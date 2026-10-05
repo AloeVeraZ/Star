@@ -400,32 +400,32 @@ void QMI8658_read_xyz(float acc[3], float gyro[3], unsigned int *tim_count)
 	//	gyro[AXIS_Z] = imu_map.sign[AXIS_Z]*gyro_t[imu_map.map[AXIS_Z]];
 }
 
-void QMI8658_read_xyz_raw(short raw_acc_xyz[3], short raw_gyro_xyz[3], unsigned int *tim_count)
+bool QMI8658_read_xyz_raw(short raw_acc_xyz[3], short raw_gyro_xyz[3], unsigned int *tim_count)
 {
-	unsigned char buf_reg[12];
+    // One checked burst covers timestamp, temperature and all six sensor axes.
+    // Reading through GZ_H also releases a retained SyncSample data lock.
+    unsigned char buf_reg[17];
+    Wire.beginTransmission(QMI8658_slave_addr);
+    Wire.write(QMI8658Register_Timestamp_L);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom(QMI8658_slave_addr, sizeof(buf_reg)) != sizeof(buf_reg)) {
+        while (Wire.available()) Wire.read();
+        return false;
+    }
+    for (unsigned int i = 0; i < sizeof(buf_reg); ++i)
+        buf_reg[i] = Wire.read();
 
-	if (tim_count)
-	{
-		unsigned char buf[3];
-		unsigned int timestamp;
-		QMI8658_read_reg(QMI8658Register_Timestamp_L, buf, 3); // 0x18	24
-		timestamp = (unsigned int)(((unsigned int)buf[2] << 16) | ((unsigned int)buf[1] << 8) | buf[0]);
-		if (timestamp > imu_timestamp)
-			imu_timestamp = timestamp;
-		else
-			imu_timestamp = (timestamp + 0x1000000 - imu_timestamp);
-
-		*tim_count = imu_timestamp;
-	}
-	QMI8658_read_reg(QMI8658Register_Ax_L, buf_reg, 12); // 0x19, 25
-
-	raw_acc_xyz[0] = (short)((unsigned short)(buf_reg[1] << 8) | (buf_reg[0]));
-	raw_acc_xyz[1] = (short)((unsigned short)(buf_reg[3] << 8) | (buf_reg[2]));
-	raw_acc_xyz[2] = (short)((unsigned short)(buf_reg[5] << 8) | (buf_reg[4]));
-
-	raw_gyro_xyz[0] = (short)((unsigned short)(buf_reg[7] << 8) | (buf_reg[6]));
-	raw_gyro_xyz[1] = (short)((unsigned short)(buf_reg[9] << 8) | (buf_reg[8]));
-	raw_gyro_xyz[2] = (short)((unsigned short)(buf_reg[11] << 8) | (buf_reg[10]));
+    if (tim_count)
+        *tim_count = (unsigned int)buf_reg[0] | ((unsigned int)buf_reg[1] << 8) |
+                     ((unsigned int)buf_reg[2] << 16);
+    for (unsigned int axis = 0; axis < 3; ++axis) {
+        const unsigned int a = 5 + axis * 2, g = 11 + axis * 2;
+        raw_acc_xyz[axis] = (short)((unsigned short)buf_reg[a] |
+                                  ((unsigned short)buf_reg[a + 1] << 8));
+        raw_gyro_xyz[axis] = (short)((unsigned short)buf_reg[g] |
+                                   ((unsigned short)buf_reg[g + 1] << 8));
+    }
+    return true;
 }
 
 void QMI8658_read_ae(float quat[4], float velocity[3])
@@ -567,7 +567,7 @@ unsigned char QMI8658_init(void)
 		QMI8658_config.inputSelection = QMI8658_CONFIG_ACCGYR_ENABLE; // QMI8658_CONFIG_ACCGYR_ENABLE;
 		QMI8658_config.accRange = QMI8658AccRange_8g;
 		QMI8658_config.accOdr = QMI8658AccOdr_1000Hz;
-		QMI8658_config.gyrRange = QMI8658GyrRange_512dps; // QMI8658GyrRange_2048dps   QMI8658GyrRange_1024dps
+		QMI8658_config.gyrRange = QMI8658GyrRange_2048dps; // avoid clipping the recorded fast turns
 		QMI8658_config.gyrOdr = QMI8658GyrOdr_1000Hz;
 		QMI8658_config.magOdr = QMI8658MagOdr_125Hz;
 		QMI8658_config.magDev = MagDev_AKM09918;

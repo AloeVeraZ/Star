@@ -284,17 +284,19 @@ class WorldFollower {
     // The turn from the normal pose (base x up) says which side went down.
     float rx = base[1] * u[2] - base[2] * u[1];
     float ry = base[2] * u[0] - base[0] * u[2];
-    float gx = fmaxf(-1.0f, fminf(1.0f, (ry + panX) * TILT_GAZE));
-    float gy = fmaxf(-1.0f, fminf(1.0f, (-rx + panY) * TILT_GAZE));
-    tiltX += (gx - tiltX) * .35f;
-    tiltY += (gy - tiltY) * .35f;
-    // Turned in the plane of the screen: the face rolls back to stay level
-    // (only when the screen is upright enough for "level" to mean something).
+    // Upright in-plane rotation moves gravity left/right, but ry stays zero.
+    // Include that planar angle so combined pitch/roll traces a full gaze circle.
     float bp = sqrtf(base[0] * base[0] + base[1] * base[1]), up = sqrtf(u[0] * u[0] + u[1] * u[1]);
     float w = fminf(bp, up);
     w = w <= .35f ? 0.0f : w >= .7f ? 1.0f : (w - .35f) / .35f;
     w = w * w * (3.0f - 2.0f * w);
     float r = atan2f(base[0] * u[1] - base[1] * u[0], base[0] * u[0] + base[1] * u[1]) * w;
+    float gx = fmaxf(-1.0f, fminf(1.0f, (ry - r + panX) * TILT_GAZE));
+    float gy = fmaxf(-1.0f, fminf(1.0f, (-rx + panY) * TILT_GAZE));
+    tiltX += (gx - tiltX) * .35f;
+    tiltY += (gy - tiltY) * .35f;
+    // Turned in the plane of the screen: the face rolls back to stay level
+    // (only when the screen is upright enough for "level" to mean something).
     roll = fmaxf(-FACE_ROLL_MAX, fminf(FACE_ROLL_MAX, r));
   }
 

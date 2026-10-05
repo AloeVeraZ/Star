@@ -2,14 +2,43 @@
 
 Changes build on testing commit `5952a15`; the original eye proportions, expression presets, blinks, spring motion, wake/sleep scripts, and dizzy performance are preserved.
 
-The current upload enables `RAW_ACCEL_SERIAL_ONLY`: native signed accelerometer
-register counts are printed as X,Y,Z CSV at 115200 baud, with other sketch and
-driver messages suppressed. The original hardware filtering remains in place.
-Idle, maximum-awake, startup, and face-down sleep are temporarily bypassed for
-continuous measurement; critical battery shutdown remains active. The user
-confirmed touch/shake waking works but walking and forward-back rocking still
-wake the display. The measurements are intended to tune that physical failure;
-the normal behavior below resumes when the diagnostic flag is disabled.
+The current local firmware restores ordinary serial logging and normal sleep
+(`RAW_IMU_SERIAL_ONLY = false`). The user identified the first 12-row recording
+as deliberate left/right shaking and the second as carried forward/back
+rotation. In those records, AY contributes about 76% versus 9% of acceleration
+variance; GZ contributes about 55% versus 29% of gyro energy, while GY contributes
+about 21% versus 59%. These are short recordings without timestamps, and several
+gyro values saturate. They support an initial axis-specific filter, not a claim
+that all future walking motion has been measured.
+
+`LeftRightWakeCheck` high-pass filters gravity over 250 ms and averages
+per-axis squared acceleration/rotation over 400 ms. It requires AY energy share
+>=50%, GZ share >=42%, GZ/GY energy >=1.35, AY RMS >=3.8 m/s2 and GZ RMS >=2.5 rad/s,
+sustained for two seconds with six signed AY sweeps and four GZ sweeps. Short
+pauses have 350 ms tolerance; 500 ms without fresh reversals or 250 ms without
+sampling cancels the attempt. Clear GY-dominant carried motion immediately
+cancels confirmation and suppresses awake discrete motion reactions/activity,
+while the visual gaze follower remains. Touch wake is independent.
+
+`left_right_wake_test.cpp` preserves both recordings using their original
+64-counts-per-degree/s gyro scale. Repeated replays at assumed 40/55/80 ms sample
+intervals and all 12 starting offsets accept the intended trace and reject the
+carried one. The short recordings alone cannot satisfy the two-second hold.
+Synthetic checks reject walking, forward/back motion, pure rotation, pure
+translation, wrong-axis rotation, sustained one-way input, brief attempts and
+attempts with a long pause. Physical testing remains the next check.
+
+The gyro is now configured for ±2048 degrees/s (16 counts per degree/s), reducing
+clipping while the driver's unit conversion keeps all gesture thresholds in
+rad/s. Six-axis raw diagnostic mode remains available through the flag above.
+
+The accelerometer-only upload showed identical readings even when moved.
+Startup previously exited WoM only on an EXT1 wake, leaving the sensor's
+retained mode active after an ESP32 upload/reset. The [QMI8658A datasheet](https://files.waveshare.com/wiki/common/QMI8658A_Datasheet_Rev_A.pdf),
+section 6, specifies that WoM generates no sensor data. Startup now clears WoM
+on every reset before normal configuration. Diagnostics use a checked 17-byte
+burst from TIMESTAMP_LOW through GZ_H and compare the 24-bit sample counter;
+incomplete I2C reads and non-advancing samples are not printed as live readings.
 
 The [Waveshare schematic](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28/ESP32-S3-Touch-LCD-1.28-Sch.pdf) identifies the QMI8658, shared I2C bus, INT2 on GPIO3, touch IRQ on GPIO5, and a 200k/100k divider from VSYS to GPIO1. VSYS includes the USB/charger power path, so GPIO1 is not an independent cell fuel gauge. Charge expressions use calibrated ADC millivolts times three, a trimmed average, smoothing, a voltage lookup, and recovery hysteresis. At 3% or less, the screen and CPU sleep with only a periodic dark charge check. Exact percentages and total board current require cell/load measurements.
 
@@ -17,7 +46,25 @@ The [QMI8658C revision 0.9 datasheet](https://files.waveshare.com/wiki/common/QM
 
 The [QMI8658A Rev A datasheet](https://files.waveshare.com/wiki/common/QMI8658A_Datasheet_Rev_A.pdf), sections 5.10, 6, and 12, also explains the existing testing firmware's INT2 output-enable and CTRL9 acknowledgement steps. INT2 starts high-impedance until enabled; WoM requires disabling sensors, choosing low-power acceleration, writing threshold/interrupt selection, issuing CTRL9, and enabling acceleration. Reading STATUS1 clears the event. Exiting WoM requires a zero threshold and the command before normal readings resume. These existing board-specific steps are retained. WoM is a coarse alarm, not a shake classifier: ordinary worn motion can wake the CPU, but the display stays dark until the full gesture is confirmed.
 
-The current wake path is restored from GitHub `origin/testing` commit `5952a15`: the CST816S stays in automatic standby and GPIO5 touch IRQ joins GPIO3 IMU INT2 in the EXT1 wake mask. A single touch wakes directly. Motion uses the testing branch's `ShakeWakeCheck` with its gravity estimate and acceleration/gyro strength. The requested hold is two seconds. To filter worn motion without a specific rotation axis, the wake check additionally requires six strong alternating acceleration strokes above 11 m/s2 and recent continued strokes. Simulated walking/running traces, isolated knocks, short/paused shakes and gyro-only swinging fail confirmation; strong sustained shakes succeed. Physical walking rejection has failed and needs the diagnostic measurements described above. The swivel-only classifier and periodic gyro polling were removed after they prevented practical waking.
+The touch IRQ and WoM interrupt setup retain the GitHub testing baseline's
+known-working path. A single touch wakes directly; motion confirmation now uses
+`LeftRightWakeCheck` in both deep-sleep startup and the dark fallback. The legacy
+any-axis `ShakeWakeCheck` remains only as a baseline reference for its existing
+host tests. No periodic gyro polling is introduced.
+
+Five quick screen taps now start a 3.5-second protected angry state. Controller
+reports are consumed without pointer movement, mood restart, or activity reset;
+queued performances are cleared. This reuses the existing angry choreography
+while suppressing its rapid gaze jitter for this pause. Touch resumes after the
+pause; sleep/battery shutdown can still override it. The screen-only tap counter
+and animation lock are tested across millis wrap.
+
+The upright gaze follower previously lost left/right in-plane roll because the
+cross-product's Y component is zero when the reference gravity lies in screen
+Y. Its planar gravity angle now contributes to horizontal gaze independently
+of whether face roll is enabled. Combined pitch/roll can trace a complete gaze
+circle; a host check exercises both axes, all four quadrants, and bounded
+radius. Existing flat tilt, gyro pan, and gravity-bias checks are retained.
 
 An independent awake-session clock starts with the existing wake animation. Its closing script begins at 24.6 seconds and is protected from all input, finishing at the 30-second deadline even under continuous touch or motion. The separate 15-second idle deadline still applies sooner.
 

@@ -107,15 +107,21 @@ int main() {
     for (int p : {25, 45, 70}) {
       int s; int ms = runAwake(*new Shake(A, f), p, 7.0f, &s);
       printf(" %5d", ms);
-      // A real shake (>= ~1.2 g) kept up makes it dizzy after about 2 s of
+      // Moderate shaking (>= ~0.9 g) now qualifies, after about 1 s of
       // shaking (it starts 0.3 s in), never sooner; a light one (0.6 g) never.
-      if (A >= 12 && (ms < 2300 || ms > 3500)) { ++fails; printf("!"); }
-      if (ms >= 0 && ms < 2300) { ++fails; printf("!"); }
+      if (A >= 9 && (ms < 1300 || ms > 2300)) { ++fails; printf("!"); }
+      if (ms >= 0 && ms < 1300) { ++fails; printf("!"); }
       if (A <= 6 && ms >= 0) { ++fails; printf("!"); }
     }
     printf("\n");
   }
   int s, ms;
+  for (int p : {25, 45, 70}) {
+    Shake uneven(12, 3, 0, 3.5f, .9f, .35f);
+    ms = runAwake(uneven, p, 4.0f, &s);
+    printf("Moderate shake with a 350 ms pause, %d ms loop: %d ms\n", p, ms);
+    if (ms < 0 || ms > 2300) ++fails;
+  }
   for (int p : {25, 45, 70}) {
     ms = runAwake(*new Shake(4, 4, 6.0f), p, 3.0f, &s);
     printf("Turning it back and forth (mostly rotation, 6 rad/s), %d ms loop: %s\n", p,
@@ -125,9 +131,9 @@ int main() {
   printf("Shakes that stop too soon must not make it dizzy:\n");
   {
     struct { const char *name; Motion *m; } brief[] = {
-      {"hard shake for 1 s", new Shake(18, 4, 0, 1.3f)},
-      {"hard shake for 1.7 s", new Shake(18, 4, 0, 2.0f)},
-      {"1 s, a 0.8 s pause, 1 s", new Shake(18, 4, 0, 3.1f, 1.3f, .8f)},
+      {"hard shake for 0.4 s", new Shake(18, 4, 0, .7f)},
+      {"hard shake for 0.6 s", new Shake(18, 4, 0, .9f)},
+      {"0.4 s, 0.8 s pause, 0.4 s", new Shake(18, 4, 0, 1.9f, .7f, .8f)},
     };
     for (auto &b : brief) {
       for (int p : {25, 45, 70}) {

@@ -90,10 +90,10 @@ static constexpr float SHAKE_FULL_MS2 = 7.0f;     // average shake strength for 
 // The dizzy spell needs a real shake kept up: back and forth, at least this
 // strong on average, for SHAKE_DIZZY_HOLD_MS without stopping (dips shorter
 // than SHAKE_DIZZY_DROPOUT_MS are forgiven; a longer pause starts over).
-static constexpr float SHAKE_DIZZY_STRENGTH = 3.5f;  // average shake strength above the noise floor
-static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 2000; // ...kept up for about two seconds
-static constexpr uint32_t SHAKE_DIZZY_DROPOUT_MS = 350;
-static constexpr uint8_t SHAKE_DIZZY_SWINGS = 6;     // ...with at least this many back-and-forth swings
+static constexpr float SHAKE_DIZZY_STRENGTH = 2.5f;  // moderate shakes reach the dizzy reaction
+static constexpr uint32_t SHAKE_DIZZY_HOLD_MS = 1000; // about one second of recognized shaking
+static constexpr uint32_t SHAKE_DIZZY_DROPOUT_MS = 500; // tolerate uneven strokes and brief pauses
+static constexpr uint8_t SHAKE_DIZZY_SWINGS = 4;     // four alternating strokes, rather than six
 // Asleep it is much harder to wake: it takes a steady shake, kept up for
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking

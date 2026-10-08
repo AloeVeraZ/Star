@@ -40,18 +40,61 @@ int main(int argc, char **argv) {
     CHECK(p >= previous && p <= 100); previous = p;
   }
   CHECK(START_ASLEEP && AUTO_DEEP_SLEEP && !WALKING_KEEPS_AWAKE);
-  CHECK(TOUCH_ENABLED && !TOUCH_WAKE_DOUBLE_PRESS); // testing branch single-touch wake
+  CHECK(TOUCH_ENABLED && TOUCH_WAKE_TAPS == 5 && TOUCH_STUCK_MS == 0);
   CHECK(sleepAnimationDelay(IDLE_SLEEP_MS) + SLEEP_SEQUENCE_MS == 15000);
-  CHECK(sleepAnimationDelay(MAX_AWAKE_MS) + SLEEP_SEQUENCE_MS == 30000);
+  CHECK(sleepAnimationDelay(WAKE_AWAKE_MS) + SLEEP_SEQUENCE_MS == 30000);
   for (uint32_t began : {100u, UINT32_MAX - 1000u}) {
     AwakeLimit limit; limit.start(began);
     for (uint32_t elapsed = 0; elapsed < 30000; ++elapsed) {
-      // Every millisecond represents another touch/shake; only wake starts the clock.
+      // No interaction: finish closing at the initial 30-second deadline.
       CHECK(limit.closingDue(began + elapsed) == (elapsed >= 24600));
     }
     CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == began + 30000);
+    limit.interaction(began + 29000); // touch during closing cancels shutdown
+    CHECK(!limit.closingDue(began + 30000));
+    CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == began + 44000);
+    limit.interaction(began + 42000);
+    CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == began + 57000);
+    CHECK(!limit.closingDue(began + 50000));
+    CHECK(limit.closingDue(began + 57000));
+    limit.start(began);
+    limit.interaction(began + 100); // early taps cannot shorten the wake window
+    CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == began + 30000);
+    for (uint32_t elapsed = 1000; elapsed <= 180000; elapsed += 1000) {
+      limit.interaction(began + elapsed);
+      CHECK(!limit.closingDue(began + elapsed));
+    }
+    CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == began + 195000);
+    CHECK(!limit.closingDue(began + 189599));
+    CHECK(limit.closingDue(began + 189600));
     limit.finish(); CHECK(!limit.closingDue(began + 40000));
     limit.start(began + 50000); CHECK(!limit.closingDue(began + 50000));
+  }
+  for (uint32_t began : {100u, UINT32_MAX - 1000u}) {
+    TouchWakeCheck taps;
+    taps.begin(began, 1);
+    for (uint32_t t = 5; t < 1000; t += 5) CHECK(!taps.feed(1, began + t));
+    CHECK(taps.count == 1); // a continuous hold never counts as several taps
+    CHECK(!taps.feed(0xFF, began + 1000));
+    CHECK(!taps.feed(0, began + 1005));
+    CHECK(taps.count == 0); // a long press is not part of a tap run
+    taps.begin(began, 0); // first tap has lifted before CPU boot completes
+    for (uint32_t tap = 2; tap <= 5; ++tap) {
+      uint32_t press = began + (tap - 1) * 200;
+      CHECK(taps.feed(1, press) == (tap == 5));
+      CHECK(!taps.feed(1, press + 5)); // duplicate contact reports
+      CHECK(!taps.feed(0, press + 50));
+    }
+    CHECK(taps.count == 5);
+    taps.begin(began, 0);
+    CHECK(!taps.feed(1, began + 20)); // release debounce
+    CHECK(!taps.feed(1, began + 200));
+    CHECK(!taps.feed(0xFF, began + 250)); // I2C error cannot act as release
+    CHECK(!taps.feed(1, began + 400));
+    CHECK(taps.count == 2);
+    CHECK(!taps.feed(0, began + 450));
+    CHECK(!taps.feed(1, began + 1000)); // slow taps restart the run
+    CHECK(taps.count == 1);
   }
   CHECK(tapMood(1) == Mood::BOOP && tapMood(2) == Mood::SURPRISED);
   CHECK(tapMood(3) == Mood::ANGRY && tapMood(4) == Mood::ANGRY);
@@ -78,33 +121,49 @@ int main(int argc, char **argv) {
     uint32_t resumed = began + 1000 + TOUCH_ANGER_PAUSE_MS;
     CHECK(!creature.touchAngerPauseActive(resumed));
     CHECK(creature.react(Mood::FOLLOWING, resumed, 600));
-    // Neither battery shutdown nor the unconditional sleep deadline is blocked.
+    // Battery shutdown and inactivity sleep can interrupt the angry pause.
     creature.startTouchAngerPause(resumed + 1);
     creature.startSleep(resumed + 2, 0);
     CHECK(!creature.touchAngerPauseActive(resumed + 3));
     CHECK(creature.asleep());
   }
 
-  { // Same final closing as the sketch: an active dizzy/touch hold cannot extend it.
+  { // Interaction after 30 seconds keeps the face awake; release allows sleep.
     EyeRenderer renderer; Eyes eyes; CreatureAnimator creature;
     renderer.begin(fb, nullptr); eyes.begin(&renderer, 1234, 100);
     creature.begin(&eyes, 1234, 100); creature.startWake(100, false);
     AwakeLimit limit; limit.start(100); bool closing = false;
-    for (uint32_t t = 116; t <= 30100; t += 16) {
+    for (uint32_t t = 116; t <= 75108; t += 16) {
+      if (t <= 60100) {
+        limit.interaction(t);
+        creature.setPointerHeld(true, t);
+        creature.react(Mood::FOLLOWING, t, 600);
+      }
       if (limit.closingDue(t)) {
         if (!closing) {
           creature.setPointerHeld(false, t);
           creature.startSleep(limit.closingAt(), 0);
           closing = true;
         }
-      } else {
-        creature.setPointerHeld(true, t);
-        creature.react(Mood::DIZZY, t, DIZZY_ANIM_MS);
       }
       creature.update(.016f, t);
+      if (t <= 60100) CHECK(!closing && !creature.asleep());
     }
-    CHECK(closing && creature.sleepFinished(30100));
+    CHECK(closing && creature.sleepFinished(75108));
     CHECK(creature.backlight() < .001f);
+  }
+  { // A tap late in closing restores the face and restarts the deadline.
+    EyeRenderer renderer; Eyes eyes; CreatureAnimator creature;
+    renderer.begin(fb, nullptr); eyes.begin(&renderer, 1234, 100);
+    creature.begin(&eyes, 1234, 100); creature.startWake(100, false);
+    AwakeLimit limit; limit.start(100);
+    creature.startSleep(limit.closingAt(), 0);
+    creature.update(.016f, 29000);
+    limit.interaction(29000);
+    CHECK(creature.react(Mood::SURPRISED, 29000, 900));
+    creature.update(.016f, 30100);
+    CHECK(!creature.asleep() && !limit.closingDue(30100));
+    CHECK(limit.closingAt() + SLEEP_SEQUENCE_MS == 44000);
   }
 
   { // An upright screen rolled/pitched around a cone should trace all quadrants.

@@ -98,7 +98,7 @@ static constexpr uint8_t SHAKE_DIZZY_SWINGS = 6;     // ...with at least this ma
 // SHAKE_WAKE_HOLD_MS (short dips under SHAKE_WAKE_DROPOUT_MS are forgiven).
 static constexpr float SHAKE_WAKE_STRENGTH = 3.5f;   // average shake strength to count as shaking
 static constexpr float SHAKE_WAKE_STROKE_MS2 = 11.0f; // one stroke while waking it
-static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 2000; // ...for this long
+static constexpr uint32_t SHAKE_WAKE_HOLD_MS = 1500; // 25% shorter than the previous two seconds
 static constexpr uint32_t SHAKE_WAKE_DROPOUT_MS = 350;
 static constexpr float SHAKE_GYRO_RAD_S = 3.0f;   // while asleep, rotation faster than this counts toward the wake shake
 static constexpr uint8_t SHAKE_WAKE_SWINGS = 6; // actual alternating strong strokes, not footsteps
@@ -174,22 +174,23 @@ static constexpr uint32_t TOUCH_RELEASE_TIMEOUT_MS = 250; // no report this long
 // Set TOUCH_ENABLED = false if the screen sits behind a cover that blocks
 // touch: the touch chip is then ignored and only motion wakes it from sleep.
 static constexpr bool TOUCH_ENABLED = true;
-// A "finger" that never lifts (a cover pressing on the glass, moisture) is
-// ignored after this long, so it cannot keep the creature angry or awake.
-static constexpr uint32_t TOUCH_STUCK_MS = 15000;
+// Zero allows a held finger to keep renewing sleep. Set a nonzero limit to
+// ignore a continuously reported press after that many milliseconds.
+static constexpr uint32_t TOUCH_STUCK_MS = 0;
 static constexpr uint32_t TOUCH_TAP_RUN_GAP_MS = 650;
 static constexpr uint32_t TOUCH_ANGER_PAUSE_MS = 3500;
 
 // ---- Sleep & power ---------------------------------------------------------------
 // After IDLE_SLEEP_MS without interaction the eyes droop, close and fade to
 // black, then the screen and ESP32 power down (deep sleep). A touch or
-// sustained shaking wakes it. Every awake session ends by MAX_AWAKE_MS.
+// sustained shaking wakes it. Interaction renews the awake window indefinitely.
 // Set AUTO_DEEP_SLEEP = false to keep the screen on instead: it then naps
 // with dimmed, closed eyes after IDLE_NAP_MS.
 static constexpr bool AUTO_DEEP_SLEEP = true;
 static constexpr uint32_t IDLE_SLEEP_MS = 15000;  // power-save timeout when AUTO_DEEP_SLEEP
-static constexpr uint32_t MAX_AWAKE_MS = 30000;  // unconditional limit, even during interaction
-static constexpr bool TOUCH_WAKE_DOUBLE_PRESS = false; // testing branch default: one touch wakes
+static constexpr uint32_t WAKE_AWAKE_MS = 30000; // initial wake window; interaction can extend it
+static constexpr uint8_t TOUCH_WAKE_TAPS = 5;    // distinct touchscreen presses to wake
+static constexpr uint32_t TOUCH_WAKE_WINDOW_MS = 3000;
 static constexpr uint32_t IDLE_NAP_MS = 45000;    // dim-nap timeout when !AUTO_DEEP_SLEEP
 static constexpr uint8_t BACKLIGHT_PERCENT = 62;
 static constexpr uint8_t NAP_BACKLIGHT_PERCENT = 14;

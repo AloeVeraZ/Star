@@ -48,7 +48,6 @@ static constexpr bool LOG_SHAKE = true;
 
 // Power (sleep timeouts, battery thresholds and backlight are in FaceConfig.h).
 RTC_DATA_ATTR bool criticalBatterySleep = false;
-static constexpr uint32_t TOUCH_TWO_PRESS_MS = 3000;
 
 // Coarse low-power motion alarm (max 255). Higher means walking wakes the CPU
 // less often for a dark-screen rotation check.
@@ -62,7 +61,6 @@ uint32_t lastActivity = 0, lastFrameUs = 0;
 bool sleepPreparing = false, deepSleepPlanned = false;
 bool imuReady = false, wokeByShake = false;
 AwakeLimit awakeLimit;
-bool forcedClosing = false;
 LeftRightWakeCheck sleepingShake;
 float tiltX = 0, tiltY = 0;
 float linX = 0, linY = 0; // smoothed gravity-free acceleration
@@ -130,15 +128,19 @@ uint32_t idleTimeout() {
 }
 
 // A user interaction: always counts as activity and ends any sleep sequence.
-bool react(Mood m, uint32_t now, uint32_t duration = 900) {
+void recordActivity(uint32_t now) {
   lastActivity = now;
+  awakeLimit.interaction(now);
+}
+
+bool react(Mood m, uint32_t now, uint32_t duration = 900) {
+  recordActivity(now);
   sleepPreparing = false;
   return creature.react(m, now, duration);
 }
 
 void startWakeAnimation(uint32_t now, bool fromShake, bool touched = false) {
   awakeLimit.start(now);
-  forcedClosing = false;
   sleepingShake = LeftRightWakeCheck();
   sleepPreparing = false;
   lastActivity = now;
@@ -157,12 +159,15 @@ void startSleepAnimation(uint32_t now) {
                 (unsigned long)(now - lastActivity));
 }
 
-// Touch wake, using the testing branch behavior.
+bool confirmTouchWake();
+
+// Closing can be interrupted by touch; a fully dark face needs five taps.
 bool cancelSleepForTouch(uint32_t now) {
-  if (batteryLow() || forcedClosing) return false;
+  if (batteryLow()) return false;
   if (!sleepPreparing) return false;
   if (creature.sleepFinished(now)) {
-    startWakeAnimation(now, false, true);
+    if (!confirmTouchWake()) return false;
+    startWakeAnimation(millis(), false, true);
     FACE_LOG(println, "Nap ended by touch");
     return true;
   }
@@ -190,7 +195,7 @@ void readBattery() {
 
 void showBatteryLevel(int percent) {
   uint32_t now = millis();
-  lastActivity = now;
+  recordActivity(now);
   sleepPreparing = false;
   creature.showBattery(percent, now);
 }
@@ -232,7 +237,7 @@ void finishTap(int x, int y, uint32_t now) {
   int streak = screenTaps.add(now);
   lastTapAt = now;
   if (streak == 5) {
-    lastActivity = now;
+    recordActivity(now);
     sleepPreparing = false;
     finger.ignoreUntilLift(now);
     creature.startTouchAngerPause(now);
@@ -259,7 +264,7 @@ void handleTouch(uint32_t now) {
   TouchTracker::Result r;
   // A finger that never lifts is not a finger (a cover pressing on the glass,
   // moisture): ignore it until it lifts, so it can't keep it angry or awake.
-  if (finger.tracking() && finger.heldFor(now) > TOUCH_STUCK_MS) {
+  if (TOUCH_STUCK_MS && finger.tracking() && finger.heldFor(now) > TOUCH_STUCK_MS) {
     finger.ignoreUntilLift(now);
     touchStuck = true;
     creature.setPointerHeld(false, now);
@@ -271,8 +276,10 @@ void handleTouch(uint32_t now) {
     touched = touch.available();
   }
   if (creature.touchAngerPauseActive(now)) {
-    // Drain reports without restarting anger, following a finger or extending sleep.
+    // Drain reports without restarting anger or following a finger. A real
+    // touch still renews sleep, even during the protected angry animation.
     if (touched) {
+      if (!touchStuck) recordActivity(now);
       auto d = touch.data;
       finger.ignoreUntilLift(now);
       finger.feed(d.x, d.y, d.event, d.gestureID, true, now);
@@ -288,7 +295,12 @@ void handleTouch(uint32_t now) {
       finger.feed(d.x, d.y, d.event, d.gestureID, true, now);
       return;
     }
-    lastActivity = now;
+    if (sleepPreparing && creature.sleepFinished(now)) {
+      cancelSleepForTouch(now);
+      finger.ignoreUntilLift(millis());
+      return; // incomplete wake taps cannot become ordinary awake reactions
+    }
+    recordActivity(now);
     // Even if the controller reports a partial/invalid coordinate, its IRQ is
     // real activity. Never finish closing the eyes while a finger is present.
     if (cancelSleepForTouch(now)) {
@@ -511,7 +523,7 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   if (steps.walking != wasWalking && LOG_SHAKE)
     FACE_LOG(println, steps.walking ? (steps.running ? "motion: running" : "motion: walking") : "motion: stopped walking");
   wasWalking = steps.walking;
-  if (steps.walking && WALKING_KEEPS_AWAKE && !sleepPreparing) lastActivity = now;
+  if (steps.walking && WALKING_KEEPS_AWAKE && !sleepPreparing) recordActivity(now);
 
   // ---- Shaking while awake ----
   // How hard it is being shaken drives a live rattle in the eyes; a single
@@ -546,7 +558,7 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   }
   if (ev == ShakeDetector::DIZZY) {
     // Wobble, spiral eyes, glare, calm down. Keep shaking: it spins again.
-    lastActivity = now;
+    recordActivity(now);
     sleepPreparing = false;
     creature.impact(lin[0], lin[1]);
     bool started = react(Mood::DIZZY, now, DIZZY_ANIM_MS);
@@ -554,7 +566,7 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
     return;
   }
   if (ev == ShakeDetector::STARTLE) {
-    lastActivity = now; // a deliberate shake has begun: an interaction
+    recordActivity(now); // a deliberate shake has begun: an interaction
     sleepPreparing = false;
     creature.impact(lin[0] * .6f, lin[1] * .6f);
     if (creature.mood() != Mood::DIZZY && creature.mood() != Mood::ANGRY) react(Mood::SURPRISED, now, 650);
@@ -575,7 +587,7 @@ void handleSurroundings(const float a[3], const float g[3], bool heldStill, uint
   }
   if (rocking) {
     // Rocked gently: it feels petted for as long as the rocking goes on.
-    lastActivity = now;
+    recordActivity(now);
     if (!creature.sustain(Mood::PETTED, now, 1400)) {
       if (LOG_SHAKE) FACE_LOG(println, "motion: rocking");
       react(Mood::PETTED, now, 1400);
@@ -676,7 +688,7 @@ void handleMotion(uint32_t now) {
     react(Mood::DIZZY, now, DIZZY_ANIM_MS); // tumbles, then glares
   } else if (TWIST_MAKES_DIZZY && activeTwist.progressing()) {
     // A partial deliberate twist counts; one incidental swing does not.
-    lastActivity = now;
+    recordActivity(now);
   }
   // Held up in front of someone: screen upright, in a hand (a little tremor,
   // not perfectly still like on a stand), not being walked around. It pays
@@ -714,7 +726,7 @@ void handleMotion(uint32_t now) {
       candidateX = tiltX; candidateY = tiltY;
       candidateSince = now;
     } else if (now - candidateSince >= TILT_ACTIVITY_HOLD_MS) {
-      lastActivity = now;
+      recordActivity(now);
       anchorX = tiltX; anchorY = tiltY;
       candidateSince = 0;
       if (sleepPreparing) {
@@ -819,9 +831,8 @@ void touchRegister(uint8_t reg, uint8_t value) {
 
 void configureTouchWake() {
   // Keep auto-standby enabled. In standby, touch generates an active-low IRQ.
-  // Enable the chip's double-click recognizer as a backup if the second touch
-  // IRQ happens while the ESP32 is still booting.
-  touchRegister(0xEC, 0x01);
+  // Count distinct presses ourselves; a gesture code cannot bypass five taps.
+  touchRegister(0xEC, 0x00);
   // 20 ms pulse makes it easier for EXT1 to catch than the 1 ms default.
   touchRegister(0xED, 200);
   Wire.beginTransmission(0x15);
@@ -832,15 +843,8 @@ void configureTouchWake() {
   touchRegister(0xFA, irqCtl | 0x40);
 }
 
-uint8_t rawTouchGesture() {
-  Wire.beginTransmission(0x15);
-  Wire.write(0x01);
-  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(0x15, 1) != 1)
-    return 0;
-  return Wire.read();
-}
-
 uint8_t rawTouchFingerCount() {
+  I2CGuard bus;
   Wire.beginTransmission(0x15);
   Wire.write(0x02);
   if (Wire.endTransmission(false) != 0 || Wire.requestFrom(0x15, 1) != 1)
@@ -848,28 +852,15 @@ uint8_t rawTouchFingerCount() {
   return Wire.read();
 }
 
-bool confirmTwoPressWake() {
-  // The first tap woke the ESP32. Keep the LCD dark until the controller
-  // reports a double click or a second distinct press IRQ arrives.
+bool confirmTouchWake() {
+  // The first tap woke the ESP32. Keep the LCD dark while counting five
+  // separate presses, with release debounce and no more than 650 ms apart.
   pinMode(TOUCH_WAKE_PIN, INPUT_PULLUP);
-  uint32_t began = millis(), releasedAt = 0;
-  bool firstReleased = rawTouchFingerCount() == 0;
-  bool irqHigh = digitalRead(TOUCH_WAKE_PIN) == HIGH;
-  if (firstReleased) releasedAt = began;
-  while (millis() - began < TOUCH_TWO_PRESS_MS) {
-    uint32_t now = millis();
-    if (rawTouchGesture() == 0x0B) return true;
-    uint8_t fingers = rawTouchFingerCount();
-    bool high = digitalRead(TOUCH_WAKE_PIN) == HIGH;
-    if (!firstReleased && fingers == 0) {
-      firstReleased = true;
-      releasedAt = now;
-    }
-    if (!high && irqHigh && firstReleased && fingers > 0 && fingers != 0xFF &&
-        now - releasedAt >= 35 && now - began >= 60) {
-      return true;
-    }
-    irqHigh = high;
+  uint32_t began = millis();
+  TouchWakeCheck check;
+  check.begin(began, rawTouchFingerCount());
+  while (millis() - began < TOUCH_WAKE_WINDOW_MS) {
+    if (check.feed(rawTouchFingerCount(), millis())) return true;
     delay(5);
   }
   return false;
@@ -1043,7 +1034,7 @@ bool enterDeepSleep(bool lcdReady) {
 }
 
 // After the IMU's coarse motion alarm woke the CPU (screen still dark): turn
-// the face on only after the recorded left/right pattern for about 2 seconds.
+// the face on only after the recorded left/right pattern for about 1.5 seconds.
 // Anything less, like walking or a short shake, goes straight back to sleep.
 bool confirmMotionWake() {
   delay(70); // let the gyro settle after leaving low-power mode
@@ -1116,9 +1107,7 @@ void setup() {
   uint64_t source = cause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
   FACE_LOG(printf, "Wake cause=%d, pins=0x%llX\n", int(cause), source);
   bool touchWake = TOUCH_ENABLED && (source & (1ULL << TOUCH_WAKE_PIN)) != 0;
-  // A touch wakes it straight away (or needs a second press when
-  // TOUCH_WAKE_DOUBLE_PRESS is set, to avoid waking in a pocket).
-  bool touchConfirmed = touchWake && (RAW_IMU_SERIAL_ONLY || !TOUCH_WAKE_DOUBLE_PRESS || confirmTwoPressWake());
+  bool touchConfirmed = touchWake && (RAW_IMU_SERIAL_ONLY || confirmTouchWake());
   // Upload/reset restarts only the ESP32, not the separately powered IMU.
   // Clear retained WoM even when this boot was not an EXT1 sleep wake.
   exitMotionWake();
@@ -1127,11 +1116,11 @@ void setup() {
   FACE_LOG(println, imuReady ? "Motion sensor ready" :
                  "Motion sensor NOT found: shake, tilt and shake-wake are disabled");
   if (!RAW_IMU_SERIAL_ONLY && START_ASLEEP && !source) {
-    FACE_LOG(println, "Starting asleep; touch or shake left/right for two seconds to wake");
+    FACE_LOG(println, "Starting asleep; five taps or shake left/right for 1.5 seconds to wake");
     if (enterDeepSleep(false)) return;
   }
   if (!RAW_IMU_SERIAL_ONLY && touchWake && !touchConfirmed && !(source & (1ULL << IMU_WAKE_PIN))) {
-    FACE_LOG(println, "Single touch wake rejected; returning to sleep");
+    FACE_LOG(println, "Touch wake incomplete; returning to sleep");
     if (enterDeepSleep(false)) return;
   }
   if (!RAW_IMU_SERIAL_ONLY && imuReady && (source & (1ULL << IMU_WAKE_PIN)) && !touchConfirmed) {
@@ -1198,22 +1187,6 @@ void loop() {
     delay(1);
     return;
   }
-  if (!RAW_IMU_SERIAL_ONLY && (forcedClosing || awakeLimit.closingDue(now))) {
-    if (!forcedClosing) {
-      forcedClosing = true;
-      creature.setPointerHeld(false, now);
-      startSleepAnimation(awakeLimit.closingAt());
-      deepSleepPlanned = true; // the 30-second limit always powers down
-      FACE_LOG(println, "30-second awake limit: finishing sleep regardless of interaction");
-    }
-    if (!creature.sleepFinished(now)) {
-      renderFrame();
-      delay(1);
-      return; // touch, shakes and other reactions cannot cancel this closing
-    }
-    awakeLimit.finish();
-    forcedClosing = false;
-  }
   if (sleepPreparing && creature.sleepFinished(now)) {
     awakeLimit.finish();
     if (deepSleepPlanned) applyBacklight(0); // darkness precedes any sensor handshake/retry
@@ -1238,14 +1211,17 @@ void loop() {
     if (creature.sleepFinished(now) && deepSleepPlanned && int32_t(now - sleepRetryAt) >= 0) {
       if (enterDeepSleep(true)) return;
     }
-  } else if (!RAW_IMU_SERIAL_ONLY && now - lastActivity >= sleepAnimationDelay(timeout) && int32_t(now - sleepRetryAt) >= 0) {
-    startSleepAnimation(now);
+  } else if (!RAW_IMU_SERIAL_ONLY && int32_t(now - sleepRetryAt) >= 0 &&
+             (AUTO_DEEP_SLEEP ? awakeLimit.closingDue(now) : now - lastActivity >= sleepAnimationDelay(timeout))) {
+    startSleepAnimation(AUTO_DEEP_SLEEP ? awakeLimit.closingAt() : now);
   }
   if (!sleepPreparing) {
-    float idle = (now - lastActivity) / float(timeout);
+    uint32_t idleElapsed = AUTO_DEEP_SLEEP ? now - awakeLimit.startedAt : now - lastActivity;
+    if (AUTO_DEEP_SLEEP) timeout = awakeLimit.timeout;
+    float idle = idleElapsed / float(timeout);
     // Lively right up to the end: heavy lids only in the last couple of seconds.
     creature.setDrowsiness(RAW_IMU_SERIAL_ONLY ? 0.0f : anim::smoothstep(.82f, 1.0f, idle));
-    creature.setIdleActsAllowed(RAW_IMU_SERIAL_ONLY || now - lastActivity + 1800 < timeout);
+    creature.setIdleActsAllowed(RAW_IMU_SERIAL_ONLY || idleElapsed + 1800 < timeout);
   }
   renderFrame();
   delay(1);

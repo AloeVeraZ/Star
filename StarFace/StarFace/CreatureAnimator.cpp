@@ -196,7 +196,7 @@ void CreatureAnimator::startWake(uint32_t now, bool fromShake, bool touched) {
 }
 
 void CreatureAnimator::startSleep(uint32_t now, float nap) {
-  touchAngerProtected = false; // battery/30-second shutdown always takes precedence
+  touchAngerProtected = false; // battery shutdown or inactivity sleep takes precedence
   queued = Mood::IDLE;
   napLevel = clamp01(nap);
   nextPeekAt = now + SLEEP_SEQUENCE_MS + randMs(9000, 20000);

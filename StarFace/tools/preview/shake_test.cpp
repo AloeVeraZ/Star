@@ -84,7 +84,7 @@ static int runAwake(Motion &m, int periodMs, float seconds, int *strokesSeen) {
 }
 
 // Mirrors confirmMotionWake(): samples every ~12 ms after boot until a steady
-// ~2 s shake is confirmed, or gives up when no shake starts or it stops.
+// ~1.5 s shake is confirmed, or gives up when no shake starts or it stops.
 static int runWake(Motion &m, float bootDelay) {
   ShakeWakeCheck chk;
   for (float tms = 0; tms < SHAKE_WAKE_HOLD_MS + 3000; tms += 12) {
@@ -168,18 +168,18 @@ int main() {
            resting ? "reacts" : "MISSED", carried ? "REACTS (wrong)" : "ignored");
     if (!resting || carried) ++fails;
   }
-  printf("\nWake from sleep needs a steady ~2 s shake (ms after boot; boot ends 0.4 s into the shake)\n");
+  printf("\nLegacy wake checker needs a steady ~1.5 s shake (ms after boot; boot ends 0.4 s into the shake)\n");
   for (float A : amps) for (float f : {3.0f, 5.0f}) {
     ms = runWake(*new Shake(A, f), .7f);
     printf("  steady shake %4.0f m/s^2 at %.0f Hz: %s", A, f, ms < 0 ? "stays asleep" : "");
     if (ms >= 0) printf("on after %d ms", ms);
-    bool bad = (A >= 12 && ms < 0) || (ms >= 0 && ms < 2000);
+    bool bad = (A >= 12 && ms < 0) || (ms >= 0 && ms < int(SHAKE_WAKE_HOLD_MS));
     if (bad) { ++fails; printf("  <-- WRONG"); }
     printf("\n");
   }
   struct { const char *name; Motion *m; } brief[] = {
     {"hard 1 s shake", new Shake(18, 4, 0, 1.3f)},
-    {"hard 1.7 s shake", new Shake(18, 4, 0, 2.0f)},
+    {"hard 1.2 s shake", new Shake(18, 4, 0, 1.5f)},
     {"1 s + pause + 1 s", new Shake(18, 4, 0, 3.1f, 1.3f, .8f)},
   };
   for (auto &b : brief) {

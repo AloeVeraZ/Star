@@ -61,7 +61,7 @@ int main() {
     for (int offset = 0; offset < 12; ++offset) {
       int yes = replay(intended, period, 20, offset);
       int no = replay(carried, period, 40, offset);
-      if (yes < 2000 || no >= 0) {
+      if (yes < int(SHAKE_WAKE_HOLD_MS) || no >= 0) {
         ++failures;
         printf("Replay %d ms offset %d: intended=%d carried=%d FAILED\n", period, offset, yes, no);
       }
@@ -70,13 +70,13 @@ int main() {
   }
   int good = synthetic(0), inverted = synthetic(0, 6000, false, true);
   printf("Deliberate left/right: %d ms, reversed signs: %d ms\n", good, inverted);
-  if (good < 2200 || good > 3500 || inverted < 2200 || inverted > 3500) ++failures;
+  if (good < 1700 || good > 2300 || inverted < 1700 || inverted > 2300) ++failures;
   for (int direction = 1; direction <= 6; ++direction) {
     int got = synthetic(direction);
     printf("Rejected motion %d: %s\n", direction, got < 0 ? "asleep" : "FALSE WAKE");
     if (got >= 0) ++failures;
   }
-  if (synthetic(0, 1900) >= 0 || synthetic(0, 3800, true) >= 0) ++failures;
+  if (synthetic(0, 1400) >= 0 || synthetic(0, 2700, true) >= 0) ++failures;
   // A gap in sampling must not count as time spent performing the gesture.
   LeftRightWakeCheck gap;
   for (int t = 0; t < 1000; t += 20) {
